@@ -1,30 +1,24 @@
-import { useState } from 'react';
-import { Upload } from './components/Upload';
-import { TranscriptionResult } from './components/TranscriptionResult';
+import React from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Layout } from './components/Layout';
+import { ProjectListPage } from './pages/ProjectListPage';
+import { UploadPage } from './pages/UploadPage';
+import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { SettingsPage } from './pages/SettingsPage';
 
-function App() {
-  const [currentFileId, setCurrentFileId] = useState<number | null>(null);
-
+const App = () => {
   return (
-    <div className="container mx-auto p-8 max-w-3xl">
-      <h1 className="text-3xl font-bold mb-8 text-center text-gray-800">Miaoji Local Transcription</h1>
-
-      <div className="space-y-8">
-        <section>
-          <h2 className="text-xl font-semibold mb-4">1. Upload Audio/Video</h2>
-          <Upload onUploadSuccess={setCurrentFileId} />
-        </section>
-
-        {currentFileId && (
-          <section>
-             <h2 className="text-xl font-semibold mb-4">2. Transcription Result</h2>
-             <TranscriptionResult fileId={currentFileId} key={currentFileId} />
-          </section>
-        )}
-      </div>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Layout />}>
+          <Route index element={<ProjectListPage />} />
+          <Route path="upload" element={<UploadPage />} />
+          <Route path="projects/:id" element={<ProjectDetailPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   );
-}
+};
 
 export default App;
-

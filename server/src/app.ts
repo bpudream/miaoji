@@ -22,7 +22,8 @@ export const buildApp = () => {
 
   // 注册插件
   fastify.register(cors, {
-    origin: true // 允许所有来源，开发阶段方便
+    origin: true, // 允许所有来源，开发阶段方便
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
   fastify.register(multipart, {

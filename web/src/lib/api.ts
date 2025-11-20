@@ -6,6 +6,21 @@ export const api = axios.create({
   baseURL: API_URL,
 });
 
+export interface Project {
+  id: number;
+  filename: string;
+  original_name: string;
+  status: 'pending' | 'processing' | 'completed' | 'error';
+  created_at: string;
+  transcription?: {
+    content: any;
+    format: string;
+  };
+}
+
+// 兼容旧代码
+export type TranscriptionResponse = Project;
+
 export interface UploadResponse {
   status: string;
   path: string;
@@ -13,14 +28,13 @@ export interface UploadResponse {
   id: number;
 }
 
-export interface TranscriptionResponse {
-  id: number;
-  filename: string;
-  status: 'pending' | 'processing' | 'completed' | 'error';
-  created_at: string;
-  transcription?: {
-    content: any; // JSON or string
-    format: string;
+export interface ProjectsResponse {
+  data: Project[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
   };
 }
 
@@ -36,8 +50,23 @@ export const uploadFile = async (file: File): Promise<UploadResponse> => {
   return response.data;
 };
 
-export const getTranscription = async (id: number): Promise<TranscriptionResponse> => {
-  const response = await api.get<TranscriptionResponse>(`/transcriptions/${id}`);
+// 重命名，推荐使用 getProject
+export const getTranscription = async (id: number): Promise<Project> => {
+  return getProject(id);
+};
+
+export const getProject = async (id: number): Promise<Project> => {
+  const response = await api.get<Project>(`/projects/${id}`);
   return response.data;
 };
 
+export const getProjects = async (page = 1, pageSize = 10, status?: string): Promise<ProjectsResponse> => {
+  const response = await api.get<ProjectsResponse>('/projects', {
+    params: { page, pageSize, status }
+  });
+  return response.data;
+};
+
+export const deleteProject = async (id: number): Promise<void> => {
+  await api.delete(`/projects/${id}`);
+};
