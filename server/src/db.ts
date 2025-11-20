@@ -8,7 +8,8 @@ if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
 }
 
-const dbPath = path.join(DB_DIR, 'miaoji.db');
+const isTest = process.env.NODE_ENV === 'test';
+const dbPath = isTest ? ':memory:' : path.join(DB_DIR, 'miaoji.db');
 const db = new Database(dbPath); // 暂时去掉 verbose 避免日志太乱
 
 // 初始化表结构
