@@ -16,7 +16,11 @@ fastify.register(cors, {
   origin: true // 允许所有来源，开发阶段方便
 });
 
-fastify.register(multipart);
+fastify.register(multipart, {
+  limits: {
+    fileSize: 500 * 1024 * 1024, // 500MB
+  }
+});
 
 // 确保上传目录存在
 const UPLOAD_DIR = path.join(__dirname, '../uploads');
@@ -45,6 +49,13 @@ fastify.post('/api/upload', async (req, reply) => {
   const filepath = path.join(UPLOAD_DIR, filename);
 
   await pipeline(data.file, fs.createWriteStream(filepath));
+
+  // 验证文件
+  const stats = await fs.promises.stat(filepath);
+  if (stats.size === 0) {
+    throw new Error('File upload failed: Empty file');
+  }
+  console.log(`[Upload] Saved ${filename} (${stats.size} bytes)`);
 
   // 插入数据库
   const stmt = db.prepare(`

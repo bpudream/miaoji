@@ -46,9 +46,14 @@ class QueueService {
       // 假设 server/src/queue.ts -> server/python/worker.py
       const workerScript = path.join(__dirname, '../python/worker.py');
 
+      // 3. 定位 Python 解释器 (使用 venv)
+      // 假设 venv 在项目根目录: server/src/../../venv/Scripts/python.exe
+      const venvPython = path.join(__dirname, '../../venv/Scripts/python.exe');
+
+      console.log(`[Queue] Spawning worker with: ${venvPython} ${workerScript}`);
+
       // 3. 启动 Python 进程
-      // 注意：这里假设系统 PATH 中有 python，且已安装依赖
-      const pythonProcess = spawn('python', [workerScript, task.filepath]);
+      const pythonProcess = spawn(venvPython, [workerScript, task.filepath]);
 
       let stdoutData = '';
       let stderrData = '';
