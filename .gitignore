@@ -20,6 +20,9 @@ dist/
 build/
 out/
 
+# diagnostics
+diagnostics/
+
 # Python
 venv/
 .venv/

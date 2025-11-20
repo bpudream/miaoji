@@ -6,68 +6,103 @@ from faster_whisper import WhisperModel
 # 强制 stdout 使用 utf-8
 sys.stdout.reconfigure(encoding='utf-8')
 
-def transcribe(file_path):
-    # 1. 输入文件检查
-    if not os.path.exists(file_path):
-        return {"error": f"File not found: {file_path}"}
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "large-v3")
 
-    # 2. 模型路径检查 (Fast Fail)
-    # 约定：模型必须位于 project_root/models/large-v3
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    model_path = os.path.join(base_dir, "models", "large-v3")
+def ensure_model_path():
+    if not os.path.exists(MODEL_PATH):
+        raise RuntimeError(f"Model directory not found at: {MODEL_PATH}. Please download the model manually.")
 
-    if not os.path.exists(model_path):
-        return {"error": f"Model directory not found at: {model_path}. Please download the model manually."}
-
-    # 检查关键文件是否存在，确保模型完整
     required_files = ["model.bin", "config.json"]
     for f in required_files:
-        if not os.path.exists(os.path.join(model_path, f)):
-            return {"error": f"Model file missing: {f} in {model_path}"}
+        if not os.path.exists(os.path.join(MODEL_PATH, f)):
+            raise RuntimeError(f"Model file missing: {f} in {MODEL_PATH}")
 
+def create_model():
+    ensure_model_path()
+    device = os.environ.get("WHISPER_DEVICE", "cuda")
+    compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
+    sys.stderr.write(f"[Worker] Using device={device}, compute_type={compute_type}\n")
+    return WhisperModel(MODEL_PATH, device=device, compute_type=compute_type)
+
+def transcribe_with_model(model: WhisperModel, file_path: str):
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    segments, info = model.transcribe(
+        file_path,
+        beam_size=5,
+        language="zh",
+        vad_filter=True
+    )
+
+    result_segments = []
+    full_text = ""
+
+    for segment in segments:
+        result_segments.append({
+            "start": segment.start,
+            "end": segment.end,
+            "text": segment.text
+        })
+        full_text += segment.text
+
+    return {
+        "language": info.language,
+        "language_probability": info.language_probability,
+        "duration": info.duration,
+        "segments": result_segments,
+        "text": full_text
+    }
+
+def run_single_file(audio_file: str):
+    sys.stderr.write(f"[Worker] Received audio file: {audio_file}\n")
     try:
-        # 3. 加载模型
-        # faster-whisper 传入本地路径时，不会尝试下载
-        model = WhisperModel(model_path, device="cuda", compute_type="int8")
-
-        # 4. 执行转写
-        segments, info = model.transcribe(
-            file_path,
-            beam_size=5,
-            language="zh",
-            vad_filter=True
-        )
-
-        # 5. 收集结果
-        result_segments = []
-        full_text = ""
-
-        for segment in segments:
-            result_segments.append({
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text
-            })
-            full_text += segment.text
-
-        return {
-            "language": info.language,
-            "language_probability": info.language_probability,
-            "duration": info.duration,
-            "segments": result_segments,
-            "text": full_text
-        }
-
+        model = create_model()
+        result = transcribe_with_model(model, audio_file)
+        print(json.dumps(result, ensure_ascii=False))
     except Exception as e:
-        # 捕获模型加载或推理过程中的任何其他错误
-        return {"error": f"Transcription failed: {str(e)}"}
+        print(json.dumps({"error": f"Transcription failed: {str(e)}"}, ensure_ascii=False))
+
+def run_server():
+    sys.stderr.write("[Worker] Starting server mode...\n")
+    try:
+        model = create_model()
+    except Exception as e:
+        sys.stderr.write(f"[Worker] Failed to load model: {e}\n")
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        return
+
+    sys.stderr.write("[Worker] Model loaded. Waiting for tasks...\n")
+
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        line = line.strip()
+        if not line:
+            continue
+
+        payload = None
+        try:
+            payload = json.loads(line)
+            audio_file = payload.get("audio_file")
+            req_id = payload.get("id")
+            if not audio_file:
+                raise ValueError("audio_file is required")
+
+            result = transcribe_with_model(model, audio_file)
+            response = {"id": req_id, "result": result}
+        except Exception as e:
+            response = {"id": payload.get("id") if payload else None, "error": str(e)}
+
+        print(json.dumps(response, ensure_ascii=False))
+        sys.stdout.flush()
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: python worker.py <file_path>"}))
-        sys.exit(1)
-
-    audio_file = sys.argv[1]
-    result = transcribe(audio_file)
-    # 确保最后只输出一行 JSON
-    print(json.dumps(result, ensure_ascii=False))
+    if len(sys.argv) >= 2 and sys.argv[1] == "--server":
+        run_server()
+    elif len(sys.argv) >= 2:
+        run_single_file(sys.argv[1])
+    else:
+        print(json.dumps({"error": "Usage: python worker.py <file_path> | --server"}, ensure_ascii=False))

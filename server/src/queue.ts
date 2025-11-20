@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import db from './db';
@@ -19,6 +19,10 @@ interface UpdateStatusExtra {
 class QueueService {
   private queue: Task[] = [];
   private isProcessing = false;
+  private pythonWorker: ChildProcessWithoutNullStreams | null = null;
+  private pythonWorkerBuffer = '';
+  private pendingWorkerRequest: { resolve: (value: any) => void; reject: (reason?: any) => void } | null = null;
+  private workerRequestId = 0;
 
   /**
    * 添加任务到队列
@@ -80,15 +84,26 @@ class QueueService {
     console.log(`[Queue] Processing File ID ${task.id}...`);
     let currentStage = 'pending';
 
+    let audioPath: string | null = null;
+    let duration = 0;
+
     try {
       // 1. Extracting
       currentStage = 'extracting';
       this.updateStatus(task.id, 'extracting');
 
       // 提取音频 (转为 16kHz WAV) 并获取时长
-      const { path: audioPath, duration } = await AudioExtractor.extract(task.filepath);
+      const extracted = await AudioExtractor.extract(task.filepath);
+      audioPath = extracted.path;
+      duration = extracted.duration;
 
       console.log(`[Queue] Audio extracted: ${audioPath} (Duration: ${duration.toFixed(2)}s)`);
+      try {
+        const stats = fs.statSync(audioPath);
+        console.log(`[Queue][Diag] Audio file size: ${stats.size} bytes, modified: ${stats.mtime.toISOString()}`);
+      } catch (statErr) {
+        console.warn(`[Queue][Diag] Failed to stat audio file ${audioPath}: ${(statErr as Error).message}`);
+      }
 
       // 2. Transcribing
       currentStage = 'transcribing';
@@ -115,6 +130,20 @@ class QueueService {
 
     } catch (error: any) {
       console.error(`[Queue] Task ${task.id} failed at ${currentStage}:`, error.message);
+
+      if (audioPath && fs.existsSync(audioPath)) {
+        try {
+          const diagnosticsDir = path.join(__dirname, '../diagnostics');
+          fs.mkdirSync(diagnosticsDir, { recursive: true });
+          const diagFilename = `${task.id}-${Date.now()}-${path.basename(audioPath)}`;
+          const diagPath = path.join(diagnosticsDir, diagFilename);
+          fs.copyFileSync(audioPath, diagPath);
+          console.log(`[Queue][Diag] Copied failing audio to ${diagPath}`);
+        } catch (copyErr) {
+          console.warn(`[Queue][Diag] Failed to copy audio for diagnostics: ${(copyErr as Error).message}`);
+        }
+      }
+
       this.updateStatus(task.id, 'error', {
         error_message: error.message,
         failed_stage: currentStage
@@ -126,64 +155,106 @@ class QueueService {
   }
 
   /**
-   * 运行 Python 转写进程
+   * 确保 Python Worker 在 server 模式下运行（单实例）
+   */
+  private ensurePythonWorker() {
+    if (this.pythonWorker) return;
+
+    const workerScript = path.join(__dirname, '../python/worker.py');
+    const venvPython = path.join(__dirname, '../../venv/Scripts/python.exe');
+
+    console.log(`[Queue] Starting persistent worker: ${venvPython} ${workerScript} --server`);
+    this.pythonWorker = spawn(venvPython, [workerScript, '--server']);
+    this.pythonWorker.stdout.setEncoding('utf-8');
+    this.pythonWorker.stderr.setEncoding('utf-8');
+    this.pythonWorkerBuffer = '';
+
+    this.pythonWorker.stdout.on('data', (data) => {
+      this.pythonWorkerBuffer += data;
+      const lines = this.pythonWorkerBuffer.split('\n');
+      this.pythonWorkerBuffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          this.handleWorkerMessage(trimmed);
+        }
+      }
+    });
+
+    this.pythonWorker.stderr.on('data', (data) => {
+      console.error(`[Worker][stderr] ${data}`);
+    });
+
+    this.pythonWorker.on('close', (code) => {
+      console.error(`[Worker] exited with code ${code}`);
+      if (this.pendingWorkerRequest) {
+        this.pendingWorkerRequest.reject(new Error(`Worker exited with code ${code}`));
+        this.pendingWorkerRequest = null;
+      }
+      this.pythonWorker = null;
+    });
+
+    this.pythonWorker.on('error', (err) => {
+      console.error(`[Worker] process error: ${err.message}`);
+      if (this.pendingWorkerRequest) {
+        this.pendingWorkerRequest.reject(err);
+        this.pendingWorkerRequest = null;
+      }
+    });
+  }
+
+  /**
+   * 运行 Python 转写进程（持久化 worker）
    */
   private runPythonWorker(audioPath: string): Promise<any> {
+    this.ensurePythonWorker();
+
     return new Promise((resolve, reject) => {
-      const workerScript = path.join(__dirname, '../python/worker.py');
-      const venvPython = path.join(__dirname, '../../venv/Scripts/python.exe');
+      if (!this.pythonWorker || !this.pythonWorker.stdin.writable) {
+        return reject(new Error('Python worker is not available'));
+      }
 
-      console.log(`[Queue] Spawning worker: ${venvPython} ${workerScript}`);
-      const pythonProcess = spawn(venvPython, [workerScript, audioPath]);
+      if (this.pendingWorkerRequest) {
+        return reject(new Error('Python worker is busy'));
+      }
 
-      let stdoutData = '';
-      let stderrData = '';
-
-      // 设置 stdout 编码，防止乱码 (虽然 python 脚本里也设了 utf-8)
-      pythonProcess.stdout.setEncoding('utf-8');
-      pythonProcess.stderr.setEncoding('utf-8');
-
-      pythonProcess.stdout.on('data', (data) => {
-        stdoutData += data;
+      this.pendingWorkerRequest = { resolve, reject };
+      const payload = JSON.stringify({
+        id: ++this.workerRequestId,
+        audio_file: audioPath
       });
-
-      pythonProcess.stderr.on('data', (data) => {
-        stderrData += data;
-        // 可以在这里解析实时进度，例如 tqdm 的输出
-        // if (data.includes('%')) ...
-      });
-
-      pythonProcess.on('close', (code) => {
-        if (code !== 0) {
-          console.error(`[Worker Error] Stderr: ${stderrData}`);
-          return reject(new Error(`Worker exited with code ${code}. Check logs.`));
-        }
-
-        try {
-          // 找到最后一行有效的 JSON (为了容错，防止有 print 日志混入)
-          const lines = stdoutData.trim().split('\n').filter(line => line.trim());
-          if (lines.length === 0) {
-            return reject(new Error('No output from worker'));
-          }
-          const lastLine = lines[lines.length - 1];
-          if (!lastLine) {
-            return reject(new Error('Empty output from worker'));
-          }
-          const result = JSON.parse(lastLine);
-
-          if (result.error) {
-            reject(new Error(result.error));
-          } else {
-            resolve(result);
-          }
-        } catch (e) {
-          console.error(`[Worker Error] Failed to parse JSON. Output: ${stdoutData}`);
-          reject(new Error(`Failed to parse JSON output from worker.`));
-        }
-      });
-
-      pythonProcess.on('error', (err) => reject(err));
+      this.pythonWorker.stdin.write(payload + '\n');
     });
+  }
+
+  private handleWorkerMessage(line: string) {
+    let message: any;
+    try {
+      message = JSON.parse(line);
+    } catch (error) {
+      console.error('[Worker] Failed to parse message:', line);
+      if (this.pendingWorkerRequest) {
+        this.pendingWorkerRequest.reject(new Error('Invalid response from worker'));
+        this.pendingWorkerRequest = null;
+      }
+      return;
+    }
+
+    if (!this.pendingWorkerRequest) {
+      console.warn('[Worker] Received message without pending request:', message);
+      return;
+    }
+
+    const { resolve, reject } = this.pendingWorkerRequest;
+    this.pendingWorkerRequest = null;
+
+    if (message.error) {
+      reject(new Error(message.error));
+    } else if (message.result) {
+      resolve(message.result);
+    } else {
+      reject(new Error('Worker returned empty result'));
+    }
   }
 }
 
