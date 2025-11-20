@@ -10,8 +10,9 @@ export interface Project {
   id: number;
   filename: string;
   original_name: string;
-  status: 'pending' | 'processing' | 'completed' | 'error';
+  status: 'pending' | 'extracting' | 'ready_to_transcribe' | 'transcribing' | 'processing' | 'completed' | 'error';
   created_at: string;
+  duration?: number; // 音频时长 (秒)
   transcription?: {
     content: any;
     format: string;

@@ -20,10 +20,27 @@ export const ProjectListPage = () => {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed': return <CheckCircle2 className="w-5 h-5 text-green-500" />;
-      case 'processing': return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />;
+      case 'processing':
+      case 'extracting':
+      case 'transcribing':
+      case 'ready_to_transcribe':
+        return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />;
       case 'error': return <AlertCircle className="w-5 h-5 text-red-500" />;
       default: return <Clock className="w-5 h-5 text-gray-400" />;
     }
+  };
+
+  const getStatusText = (status: string) => {
+    const statusMap: Record<string, string> = {
+      pending: '等待中',
+      extracting: '提取音频',
+      ready_to_transcribe: '准备转写',
+      transcribing: '转写中',
+      processing: '处理中',
+      completed: '已完成',
+      error: '错误'
+    };
+    return statusMap[status] || status;
   };
 
   return (
@@ -63,7 +80,7 @@ export const ProjectListPage = () => {
                 <div className="flex items-center justify-between text-sm text-gray-500 mt-4">
                   <span className="flex items-center gap-1.5">
                     {getStatusIcon(project.status)}
-                    <span className="capitalize font-medium">{project.status}</span>
+                    <span className="font-medium">{getStatusText(project.status)}</span>
                   </span>
                   <span>{new Date(project.created_at).toLocaleDateString()}</span>
                 </div>

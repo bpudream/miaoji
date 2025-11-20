@@ -184,6 +184,11 @@ export const buildApp = () => {
 
   // 获取单个项目详情 (目前与 transcriptions/:id 逻辑类似，但作为通用入口)
   fastify.get('/api/projects/:id', async (request, reply) => {
+    // 添加禁止缓存头，替代前端的 _t 参数
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    reply.header('Pragma', 'no-cache');
+    reply.header('Expires', '0');
+
     // 复用 transcriptions/:id 的逻辑，直接重定向或者调用相同处理函数
     // 这里为了简单直接拷贝逻辑，但通常应该提取 controller
     const { id } = request.params as { id: string };
@@ -194,6 +199,8 @@ export const buildApp = () => {
     if (!file) {
       return reply.code(404).send({ error: 'Project not found' });
     }
+
+    console.log(`[API] GET /api/projects/${id} - Current status: ${file.status}`);
 
     let transcription = null;
     // 即使未完成，也可能想看详情，这里不做 status 限制，只查有没有 result
@@ -217,6 +224,7 @@ export const buildApp = () => {
       original_name: file.original_name,
       status: file.status,
       created_at: file.created_at,
+      duration: file.duration, // ✅ 添加 duration 字段
       transcription
     };
   });
@@ -226,8 +234,8 @@ export const buildApp = () => {
     const { id } = request.params as { id: string };
 
     // 1. 获取文件路径
-    const fileStmt = db.prepare('SELECT filepath FROM media_files WHERE id = ?');
-    const file = fileStmt.get(id) as { filepath: string };
+    const fileStmt = db.prepare('SELECT filepath, audio_path FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as { filepath: string; audio_path?: string };
 
     if (!file) {
       return reply.code(404).send({ error: 'Project not found' });
@@ -252,13 +260,46 @@ export const buildApp = () => {
     try {
       if (fs.existsSync(file.filepath)) {
         await fs.promises.unlink(file.filepath);
-        console.log(`[Delete] Deleted file: ${file.filepath}`);
+      }
+      // 同时删除提取的音频文件
+      if (file.audio_path && fs.existsSync(file.audio_path)) {
+        await fs.promises.unlink(file.audio_path);
       }
     } catch (e) {
-      console.error(`[Delete] Failed to delete file ${file.filepath}:`, e);
+      console.error(`[Delete] Failed to delete files:`, e);
     }
 
     return { status: 'success', id };
+  });
+
+  // 重试项目
+  fastify.post('/api/projects/:id/retry', async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const fileStmt = db.prepare('SELECT * FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as any;
+
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    if (file.status !== 'error') {
+      return reply.code(400).send({ error: 'Can only retry failed projects' });
+    }
+
+    // 重置状态
+    const updateStmt = db.prepare(`
+      UPDATE media_files
+      SET status = 'pending', error_message = NULL, failed_stage = NULL
+      WHERE id = ?
+    `);
+    updateStmt.run(id);
+
+    // 重新加入队列
+    // 如果原始文件不存在了，队列处理时会报错，循环进入 error 状态，这是合理的
+    queue.add(file.id, file.filepath);
+
+    return { status: 'success', message: 'Task queued for retry' };
   });
 
   return fastify;

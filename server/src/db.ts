@@ -14,18 +14,52 @@ const db = new Database(dbPath); // 暂时去掉 verbose 避免日志太乱
 
 // 初始化表结构
 const initDb = () => {
+  // 如果是测试环境，每次都重建表
+  if (isTest) {
+    db.exec('DROP TABLE IF EXISTS summaries');
+    db.exec('DROP TABLE IF EXISTS transcriptions');
+    db.exec('DROP TABLE IF EXISTS media_files');
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS media_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       filename TEXT NOT NULL,
       filepath TEXT NOT NULL,
+      audio_path TEXT,            -- 提取后的音频路径 (16kHz WAV)
       original_name TEXT,
       size INTEGER,
       mime_type TEXT,
-      status TEXT DEFAULT 'pending', -- pending, processing, completed, error
+      status TEXT DEFAULT 'pending', -- pending, extracting, ready_to_transcribe, transcribing, transcribed, completed, error
+      error_message TEXT,         -- 错误信息
+      failed_stage TEXT,          -- 失败阶段
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // 简单的迁移逻辑：尝试添加新列（如果旧数据库存在）
+  // 注意：在生产环境中应使用专门的迁移工具
+  const columns = [
+    'audio_path TEXT',
+    'error_message TEXT',
+    'failed_stage TEXT',
+    'duration REAL' // 添加 duration 字段
+  ];
+
+  if (!isTest) {
+    columns.forEach(col => {
+      try {
+        const colName = col.split(' ')[0];
+        db.exec(`ALTER TABLE media_files ADD COLUMN ${col}`);
+        console.log(`[DB] Added column ${colName} to media_files`);
+      } catch (e: any) {
+        // 忽略 "duplicate column name" 错误
+        if (!e.message.includes('duplicate column name')) {
+          // console.error(`[DB] Migration error: ${e.message}`);
+        }
+      }
+    });
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS transcriptions (
@@ -53,4 +87,3 @@ const initDb = () => {
 initDb();
 
 export default db;
-

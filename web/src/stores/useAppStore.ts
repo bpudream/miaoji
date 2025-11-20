@@ -8,7 +8,7 @@ interface AppState {
   error: string | null;
 
   loadProjects: () => Promise<void>;
-  loadProject: (id: number) => Promise<void>;
+  loadProject: (id: number, silent?: boolean) => Promise<void>;
   removeProject: (id: number) => Promise<void>;
   clearCurrentProject: () => void;
 }
@@ -29,8 +29,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  loadProject: async (id: number) => {
-    set({ isLoading: true, error: null });
+  loadProject: async (id: number, silent = false) => {
+    if (!silent) set({ isLoading: true, error: null });
     try {
       const project = await getProject(id);
       set({ currentProject: project, isLoading: false });
