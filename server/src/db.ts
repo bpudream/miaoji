@@ -78,6 +78,7 @@ const initDb = () => {
       media_file_id INTEGER,
       content TEXT,
       model TEXT,
+      mode TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (media_file_id) REFERENCES media_files(id)
     );

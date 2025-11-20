@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { ArrowLeft, Clock, FileText, CheckCircle2, AlertCircle, Loader2, Copy } from 'lucide-react';
+import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy } from 'lucide-react';
 import { clsx } from 'clsx';
+import { SummaryPanel } from '../components/SummaryPanel';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -183,10 +184,10 @@ export const ProjectDetailPage = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2 space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-12 gap-6">
+        <div className="lg:col-span-2 xl:col-span-7 2xl:col-span-8 space-y-6">
           {/* Transcription Content */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 min-h-[400px]">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 min-h-[400px] h-full">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
                 <FileText className="w-5 h-5 text-blue-500" />
@@ -242,16 +243,12 @@ export const ProjectDetailPage = () => {
           </div>
         </div>
 
-        <div className="col-span-1 space-y-6">
-          {/* AI Summary Placeholder */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-fit">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-800">
-              <span>✨</span> AI 总结
-            </h2>
-            <p className="text-gray-400 text-sm bg-gray-50 p-4 rounded-lg border border-gray-100">
-              AI 总结功能正在开发中 (Sprint 4)...
-            </p>
-          </div>
+        <div className="lg:col-span-1 xl:col-span-5 2xl:col-span-4 space-y-6">
+          {/* AI Summary */}
+          <SummaryPanel
+            projectId={currentProject.id}
+            transcriptionExists={!!(currentProject.transcription && currentProject.transcription.content)}
+          />
         </div>
       </div>
     </div>

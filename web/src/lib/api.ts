@@ -71,3 +71,30 @@ export const getProjects = async (page = 1, pageSize = 10, status?: string): Pro
 export const deleteProject = async (id: number): Promise<void> => {
   await api.delete(`/projects/${id}`);
 };
+
+export type SummaryMode = 'brief' | 'detailed' | 'key_points';
+
+export interface SummaryResponse {
+  status: string;
+  summary: string; // Markdown content
+  mode: SummaryMode;
+}
+
+export interface Summary {
+    id: number;
+    media_file_id: number;
+    content: string;
+    model: string;
+    mode: string;
+    created_at: string;
+}
+
+export const generateSummary = async (id: number, mode: SummaryMode): Promise<SummaryResponse> => {
+    const response = await api.post<SummaryResponse>(`/projects/${id}/summarize`, { mode });
+    return response.data;
+};
+
+export const getSummary = async (id: number, mode?: SummaryMode): Promise<Summary> => {
+    const response = await api.get<Summary>(`/projects/${id}/summary`, { params: { mode } });
+    return response.data;
+}

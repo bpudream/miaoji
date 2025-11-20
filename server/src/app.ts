@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import db from './db';
 import queue from './queue';
+import { ollamaService, SummaryMode } from './services/ollama';
 
 export const buildApp = () => {
   const fastify = Fastify({
@@ -227,6 +228,110 @@ export const buildApp = () => {
       duration: file.duration, // ✅ 添加 duration 字段
       transcription
     };
+  });
+
+  // 生成总结
+  fastify.post('/api/projects/:id/summarize', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { mode = 'brief' } = request.body as { mode: SummaryMode };
+
+    // 1. 获取项目和转写结果
+    const fileStmt = db.prepare('SELECT * FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as any;
+
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    // Check if transcription exists
+    const transStmt = db.prepare('SELECT * FROM transcriptions WHERE media_file_id = ?');
+    const transcription = transStmt.get(id) as any;
+
+    if (!transcription || !transcription.content) {
+      return reply.code(400).send({ error: 'No transcription available for this project' });
+    }
+
+    let fullText = '';
+    try {
+      // Handle both JSON (segments) and plain text content
+      if (transcription.format === 'json') {
+        const content = JSON.parse(transcription.content);
+        if (content.fullText) {
+          fullText = content.fullText;
+        } else if (Array.isArray(content)) {
+           fullText = content.map((s: any) => s.text).join(' ');
+        } else if (content.segments) {
+           fullText = content.segments.map((s: any) => s.text).join(' ');
+        }
+      } else {
+        fullText = transcription.content;
+      }
+    } catch (e) {
+      fullText = transcription.content; // Fallback to raw content
+    }
+
+    if (!fullText) {
+       return reply.code(400).send({ error: 'Transcription text is empty' });
+    }
+
+    try {
+      // 2. 检查 Ollama 服务
+      const isRunning = await ollamaService.ensureRunning();
+      if (!isRunning) {
+        return reply.code(503).send({ error: 'Ollama service is not available. Please make sure Ollama is running.' });
+      }
+
+      // 3. 生成 Prompt
+      const { prompt, system } = ollamaService.getPrompts(fullText, mode);
+
+      // 4. 调用 Ollama (非流式，简单起见)
+      const summaryText = await ollamaService.generate(prompt, system);
+
+      // 5. 保存/更新到数据库
+      // Remove previous summaries of same mode to keep it clean?
+      // db.prepare('DELETE FROM summaries WHERE media_file_id = ? AND mode = ?').run(id, mode);
+
+      const insertStmt = db.prepare(`
+        INSERT INTO summaries (media_file_id, content, model, mode)
+        VALUES (?, ?, ?, ?)
+      `);
+      insertStmt.run(id, summaryText, 'qwen3:14b', mode);
+
+      return {
+        status: 'success',
+        summary: summaryText,
+        mode
+      };
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(500).send({ error: 'Failed to generate summary', details: error.message });
+    }
+  });
+
+  // 获取总结
+  fastify.get('/api/projects/:id/summary', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { mode } = request.query as { mode?: string };
+
+    let sql = 'SELECT * FROM summaries WHERE media_file_id = ?';
+    const params: any[] = [id];
+
+    if (mode) {
+      sql += ' AND mode = ?';
+      params.push(mode);
+    }
+
+    sql += ' ORDER BY created_at DESC LIMIT 1';
+
+    const stmt = db.prepare(sql);
+    const summary = stmt.get(...params);
+
+    if (!summary) {
+      return reply.code(404).send({ error: 'Summary not found' });
+    }
+
+    return summary;
   });
 
   // 删除项目
