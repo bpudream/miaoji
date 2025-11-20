@@ -1,6 +1,43 @@
-venv
-node_modules
+# System & Editor
+.DS_Store
+.vscode/
+.idea/
+*.log
+
+# Environment Variables
 .env
-.vscode
-sample
-models
+.env.*
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# package-lock.json should be committed
+
+# Build Outputs
+dist/
+build/
+out/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# AI Models & Large Files
+models/
+sample/
+
+# Server specific
+server/uploads/*
+!server/uploads/.gitkeep
+server/data/*.db
+server/data/*.db-journal
+server/data/*.db-wal
+
+# Web specific
+web/.vite/
