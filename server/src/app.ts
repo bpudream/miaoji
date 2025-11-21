@@ -369,6 +369,134 @@ export const buildApp = () => {
     return summary;
   });
 
+  const sanitizeFilename = (name: string) => {
+    return name.replace(/[\\/:*?"<>|]+/g, '_').trim();
+  };
+
+  const buildContentDisposition = (baseName: string, ext: string, fallback: string) => {
+    const sanitized = sanitizeFilename(baseName) || fallback;
+    const ascii = sanitized
+      .replace(/[^\x20-\x7E]+/g, '_')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '') || fallback;
+    const encoded = encodeURIComponent(`${sanitized}.${ext}`);
+    return `attachment; filename="${ascii}.${ext}"; filename*=UTF-8''${encoded}`;
+  };
+
+  const parseTranscriptionContent = (transcription: any) => {
+    let parsed: any = transcription.content;
+    try {
+      if (transcription.format === 'json') {
+        parsed = JSON.parse(transcription.content);
+      }
+    } catch (e) {
+      parsed = transcription.content;
+    }
+
+    let segments: any[] = [];
+    let text = '';
+
+    if (Array.isArray(parsed)) {
+      segments = parsed;
+      text = parsed.map((s) => s.text).join(' ');
+    } else if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed.segments)) {
+        segments = parsed.segments;
+      }
+      text = parsed.fullText || parsed.text || parsed.content || '';
+      if (!text && segments.length) {
+        text = segments.map((s: any) => s.text).join(' ');
+      }
+    } else if (typeof parsed === 'string') {
+      text = parsed;
+    }
+
+    if (!text && typeof transcription.content === 'string') {
+      text = transcription.content;
+    }
+
+    return { parsed, segments, text };
+  };
+
+  const formatSrtTimestamp = (seconds: number) => {
+    const totalMs = Math.round(seconds * 1000);
+    const hours = Math.floor(totalMs / 3_600_000);
+    const minutes = Math.floor((totalMs % 3_600_000) / 60_000);
+    const secs = Math.floor((totalMs % 60_000) / 1000);
+    const ms = totalMs % 1000;
+    const pad = (num: number, len: number) => num.toString().padStart(len, '0');
+    return `${pad(hours, 2)}:${pad(minutes, 2)}:${pad(secs, 2)},${pad(ms, 3)}`;
+  };
+
+  fastify.get('/api/projects/:id/export', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { format = 'txt' } = request.query as { format?: string };
+
+    const allowedFormats = ['txt', 'json', 'srt'];
+    if (!allowedFormats.includes(format)) {
+      return reply.code(400).send({ error: 'Unsupported export format' });
+    }
+
+    const fileStmt = db.prepare('SELECT * FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as any;
+
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    const transStmt = db.prepare('SELECT * FROM transcriptions WHERE media_file_id = ?');
+    const transcription = transStmt.get(id) as any;
+
+    if (!transcription) {
+      return reply.code(404).send({ error: 'Transcription not found' });
+    }
+
+    const { parsed, segments, text } = parseTranscriptionContent(transcription);
+    const fallbackName = `project-${id}`;
+    const safeBaseName = sanitizeFilename(file.original_name || file.filename || fallbackName);
+
+    if (format === 'json') {
+      reply.header('Content-Type', 'application/json; charset=utf-8');
+      reply.header('Content-Disposition', buildContentDisposition(safeBaseName, 'json', fallbackName));
+      return parsed;
+    }
+
+    if (format === 'srt') {
+      const usableSegments = segments.length
+        ? segments
+        : [
+            {
+              start: 0,
+              end: Math.max(file.duration ?? 0, text ? text.length / 4 : 5),
+              text: text || '',
+            },
+          ];
+
+      const srt = usableSegments
+        .map((seg: any, index: number) => {
+          const start = formatSrtTimestamp(Number(seg.start) || 0);
+          const end = formatSrtTimestamp(Number(seg.end) || Number(seg.start) + 1);
+          const content = (seg.text || '').trim() || '(空)';
+          return `${index + 1}\n${start} --> ${end}\n${content}\n`;
+        })
+        .join('\n');
+
+      reply.header('Content-Type', 'application/x-subrip; charset=utf-8');
+      reply.header('Content-Disposition', buildContentDisposition(safeBaseName, 'srt', fallbackName));
+      return srt;
+    }
+
+    // default txt
+    const plainText =
+      text ||
+      (segments.length ? segments.map((seg: any) => seg.text).join(' ') : transcription.content || '');
+
+    reply.header('Content-Type', 'text/plain; charset=utf-8');
+    reply.header('Content-Disposition', buildContentDisposition(safeBaseName, 'txt', fallbackName));
+    return plainText;
+  });
+
   // 删除项目
   fastify.delete('/api/projects/:id', async (request, reply) => {
     const { id } = request.params as { id: string };

@@ -1,16 +1,20 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy } from 'lucide-react';
+import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy, Download } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionResult } from '../components/TranscriptionResult';
+import { exportTranscription, ExportFormat } from '../lib/api';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const { currentProject, isLoading, error } = useAppStore();
   const timerRef = useRef<NodeJS.Timeout>();
   const isPollingRef = useRef(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
 
   // 记录进入转写状态的时间
   const transcriptionStartTimeRef = useRef<number | null>(null);
@@ -127,6 +131,40 @@ export const ProjectDetailPage = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (!exportMenuRef.current) return;
+      if (!exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleExport = async (format: ExportFormat) => {
+    if (!currentProject) return;
+    setExportingFormat(format);
+    try {
+      const { blob, filename } = await exportTranscription(currentProject.id, format);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const fallbackName = `${currentProject.original_name || currentProject.filename || 'transcription'}.${format}`;
+      link.download = filename || fallbackName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert('导出失败，请稍后再试');
+    } finally {
+      setExportingFormat(null);
+      setExportMenuOpen(false);
+    }
+  };
+
   if (isLoading && !currentProject) return <div className="p-8 text-center">加载中...</div>;
   if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
   if (!currentProject) return <div className="p-8 text-center">项目不存在</div>;
@@ -178,9 +216,7 @@ export const ProjectDetailPage = () => {
                 </span>
               </div>
             </div>
-            <div className="flex gap-2">
-              {/* Action Buttons */}
-            </div>
+            <div />
           </div>
         </div>
       </div>
@@ -194,19 +230,59 @@ export const ProjectDetailPage = () => {
                 <FileText className="w-5 h-5 text-blue-500" />
                 转写内容
               </h2>
-              {currentProject.transcription && (
-                <button
-                  className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
-                  onClick={() => {
-                    const content = currentProject.transcription?.content;
-                    const text = typeof content === 'object' ? (content.text || JSON.stringify(content)) : content;
-                    navigator.clipboard.writeText(text || '');
-                  }}
-                  title="复制全文"
-                >
-                  <Copy className="w-4 h-4" />
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {currentProject.transcription && (
+                  <button
+                    className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
+                    onClick={() => {
+                      const content = currentProject.transcription?.content;
+                      const text = typeof content === 'object' ? (content.text || JSON.stringify(content)) : content;
+                      navigator.clipboard.writeText(text || '');
+                    }}
+                    title="复制全文"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                )}
+                {currentProject.status === 'completed' && (
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExportMenuOpen((prev) => !prev);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                    >
+                      <Download className="w-4 h-4" />
+                      导出
+                    </button>
+                    {exportMenuOpen && (
+                      <div className="absolute right-0 mt-2 w-40 rounded-xl border border-gray-100 bg-white p-1 text-sm shadow-lg z-20">
+                        {[
+                          { format: 'txt', label: 'TXT 文本' },
+                          { format: 'json', label: 'JSON 数据' },
+                          { format: 'srt', label: 'SRT 字幕' },
+                        ].map((option) => (
+                          <button
+                            key={option.format}
+                            onClick={() => handleExport(option.format as ExportFormat)}
+                            disabled={exportingFormat === option.format}
+                            className={clsx(
+                              'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-gray-50',
+                              exportingFormat === option.format ? 'text-gray-400' : 'text-gray-700'
+                            )}
+                          >
+                            <span>{option.label}</span>
+                            {exportingFormat === option.format && (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {currentProject.status === 'completed' ? (

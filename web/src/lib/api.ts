@@ -97,7 +97,30 @@ export const generateSummary = async (id: number, mode: SummaryMode): Promise<Su
 export const getSummary = async (id: number, mode?: SummaryMode): Promise<Summary> => {
     const response = await api.get<Summary>(`/projects/${id}/summary`, { params: { mode } });
     return response.data;
-}
+};
+
+export type ExportFormat = 'txt' | 'json' | 'srt';
+
+export const exportTranscription = async (id: number, format: ExportFormat) => {
+  const response = await api.get<Blob>(`/projects/${id}/export`, {
+    params: { format },
+    responseType: 'blob',
+  });
+
+  const disposition = response.headers['content-disposition'] as string | undefined;
+  let filename: string | undefined;
+  if (disposition) {
+    const match = disposition.match(/filename="?(.+?)"?$/i);
+    if (match) {
+      filename = decodeURIComponent(match[1]);
+    }
+  }
+
+  return {
+    blob: response.data,
+    filename,
+  };
+};
 
 export const updateTranscription = async (id: number, segments: any[]): Promise<void> => {
   await api.put(`/projects/${id}/transcription`, { segments });
