@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Upload, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Upload, Settings, ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react';
 import { clsx } from 'clsx';
 
 export const Layout = () => {
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const isDetailPage = location.pathname.startsWith('/projects/');
 
   // Auto-collapse on project detail page
   useEffect(() => {
-    const isDetailPage = location.pathname.startsWith('/projects/');
     setIsCollapsed(isDetailPage);
-  }, [location.pathname]);
+  }, [isDetailPage]);
 
   const isActive = (path: string) => {
     return location.pathname === path ? 'bg-blue-50 text-blue-600 border-r-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50';
@@ -21,10 +21,16 @@ export const Layout = () => {
     <div className="flex h-screen bg-gray-100">
       {/* Sidebar */}
       <div className={clsx("bg-white shadow-md flex flex-col transition-all duration-300", isCollapsed ? "w-16" : "w-64")}>
-        <div className="p-6">
-          <h1 className={clsx("text-2xl font-bold text-blue-600 flex items-center gap-2 transition-all", isCollapsed && "justify-center")}>
-            <span>🎙️</span> {!isCollapsed && '妙记 AI'}
-          </h1>
+        <div className="p-6 flex items-center justify-center">
+          {isDetailPage && isCollapsed ? (
+            <Link to="/" className="text-gray-500 hover:text-blue-600 transition-colors p-1" title="返回列表">
+              <ArrowLeft className="w-6 h-6" />
+            </Link>
+          ) : (
+            <h1 className={clsx("text-2xl font-bold text-blue-600 flex items-center gap-2 transition-all", isCollapsed && "justify-center")}>
+              <span>🎙️</span> {!isCollapsed && '妙记 AI'}
+            </h1>
+          )}
         </div>
         <nav className="mt-6 flex-1">
           <Link

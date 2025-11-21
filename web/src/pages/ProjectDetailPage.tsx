@@ -203,15 +203,7 @@ export const ProjectDetailPage = () => {
   };
 
   return (
-    <div className="min-h-screen relative">
-      {/* Floating back button */}
-      <Link
-        to="/"
-        className="fixed top-6 left-6 z-50 flex items-center gap-1 rounded-full bg-white/90 backdrop-blur-sm px-4 py-2 text-sm text-gray-600 shadow-lg border border-gray-200 hover:bg-white hover:text-gray-900 hover:shadow-xl transition-all"
-      >
-        <ArrowLeft className="w-4 h-4" /> 返回列表
-      </Link>
-
+    <div className="min-h-screen">
       <div className="mb-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">

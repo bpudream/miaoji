@@ -89,37 +89,36 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
 
   return (
     <div className={clsx("flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm", className)}>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b pb-3">
         <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
           <Sparkles className="w-5 h-5 text-purple-500" />
           AI 总结
         </h2>
-        <div className="flex gap-2">
-           {summary && (
-             <button onClick={handleCopy} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors" title="复制">
-               <Copy className="w-4 h-4" />
-             </button>
-           )}
+        <div className="flex items-center gap-2">
+          <div className="flex bg-gray-100 rounded-lg p-1">
+            {(['brief', 'detailed', 'key_points'] as SummaryMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={clsx(
+                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
+                  mode === m
+                    ? "bg-white text-purple-700 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-200/50"
+                )}
+              >
+                {m === 'brief' && '简要'}
+                {m === 'detailed' && '详细'}
+                {m === 'key_points' && '要点'}
+              </button>
+            ))}
+          </div>
+          {summary && (
+            <button onClick={handleCopy} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors" title="复制">
+              <Copy className="w-4 h-4" />
+            </button>
+          )}
         </div>
-      </div>
-
-      <div className="flex gap-2 mb-4 flex-wrap">
-        {(['brief', 'detailed', 'key_points'] as SummaryMode[]).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            className={clsx(
-              "px-3 py-1.5 text-sm font-medium rounded-lg transition-colors",
-              mode === m
-                ? "bg-purple-100 text-purple-700 border border-purple-200"
-                : "text-gray-600 hover:bg-gray-50 border border-transparent"
-            )}
-          >
-            {m === 'brief' && '简要'}
-            {m === 'detailed' && '详细'}
-            {m === 'key_points' && '要点'}
-          </button>
-        ))}
       </div>
 
       <div className="flex-1 min-h-[200px] overflow-hidden">
