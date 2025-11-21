@@ -261,6 +261,7 @@ export const buildApp = () => {
       status: file.status,
       created_at: file.created_at,
       duration: file.duration, // ✅ 添加 duration 字段
+      mime_type: file.mime_type, // ✅ 添加 mime_type 字段用于判断音频/视频
       transcription
     };
   });

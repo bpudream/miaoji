@@ -1,14 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import clsx from 'clsx';
-import { FileText, Download } from 'lucide-react';
 import { getTranscription, TranscriptionResponse, updateTranscription } from '../lib/api';
 
 interface Props {
   fileId: number;
   className?: string;
-  onToggleVersionPanel?: () => void;
-  onTriggerRefine?: () => void;
-  onExport?: () => void;
+  isEditing?: boolean; // 外部控制的编辑状态
+  onEditingChange?: (editing: boolean) => void; // 编辑状态变化回调
 }
 
 interface Segment {
@@ -20,13 +18,13 @@ interface Segment {
 type FilterMode = 'all' | 'edited';
 type DensityMode = 'comfortable' | 'compact';
 
-export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onToggleVersionPanel, onTriggerRefine, onExport }) => {
+export const TranscriptionResult: React.FC<Props> = ({ fileId, className, isEditing: externalIsEditing, onEditingChange }) => {
   const [data, setData] = useState<TranscriptionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [isEditing, setIsEditing] = useState(false); // New state for edit mode
+  const [isEditing, setIsEditing] = useState(externalIsEditing ?? false); // 使用外部状态或内部状态
   const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
@@ -182,13 +180,28 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
     }
   };
 
+  // 同步外部编辑状态
+  useEffect(() => {
+    if (externalIsEditing !== undefined) {
+      setIsEditing(externalIsEditing);
+    }
+  }, [externalIsEditing]);
+
   const enableEditing = (focusIndex?: number) => {
-    setIsEditing(true);
+    const newEditingState = true;
+    setIsEditing(newEditingState);
+    onEditingChange?.(newEditingState);
     if (typeof focusIndex === 'number') {
       setPendingFocusIndex(focusIndex);
     } else {
       setPendingFocusIndex(null);
     }
+  };
+
+  const disableEditing = () => {
+    const newEditingState = false;
+    setIsEditing(newEditingState);
+    onEditingChange?.(newEditingState);
   };
 
   useEffect(() => {
@@ -290,47 +303,6 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
         </div>
       </div>
 
-      {/* Header row 2: Action buttons (Edit, Refine, Version, Export) */}
-      {data.status === 'completed' && segments.length > 0 && (
-        <div className="flex items-center gap-2 -mt-2">
-          <button
-            onClick={() => enableEditing()}
-            className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
-            title={isEditing ? "编辑中" : "进入编辑"}
-          >
-            <FileText className="w-4 h-4" />
-            编辑
-          </button>
-          <button
-            onClick={onTriggerRefine}
-            className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-purple-400 hover:text-purple-600 transition-colors disabled:opacity-40"
-            disabled
-            title="AI润色（即将推出）"
-          >
-            <span className="text-base">✨</span>
-            润色
-          </button>
-          <button
-            onClick={onToggleVersionPanel}
-            className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors disabled:opacity-40"
-            disabled
-            title="版本管理（即将推出）"
-          >
-            <span className="text-base">📋</span>
-            版本
-          </button>
-          {onExport && (
-            <button
-              onClick={onExport}
-              className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
-              title="导出"
-            >
-              <Download className="w-4 h-4" />
-              导出
-            </button>
-          )}
-        </div>
-      )}
 
       {data.status === 'processing' && (
          <div className="flex items-center space-x-2 text-blue-600">
@@ -449,7 +421,7 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
             {isSaving ? '自动保存中…' : '更改将自动保存'}
           </span>
           <button
-            onClick={() => setIsEditing(false)}
+            onClick={disableEditing}
             className="h-9 rounded-full bg-blue-600 px-4 text-sm font-medium text-white shadow hover:bg-blue-700"
           >
             完成

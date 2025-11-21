@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy, PlayCircle, Volume2 } from 'lucide-react';
+import { Clock, FileText, AlertCircle, Loader2, Copy, PlayCircle, Volume2, Download } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionResult } from '../components/TranscriptionResult';
@@ -142,6 +142,10 @@ export const ProjectDetailPage = () => {
     return () => document.removeEventListener('click', handleClick);
   }, []);
 
+  // ⚠️ 重要：所有 hooks 必须在早期返回之前调用
+  const [playerMode, setPlayerMode] = useState<'audio' | 'video'>('audio'); // 默认音频模式
+  const [isEditing, setIsEditing] = useState(false); // 编辑状态，由TranscriptionResult控制
+
   const handleExport = async (format: ExportFormat) => {
     if (!currentProject) return;
     setExportingFormat(format);
@@ -165,6 +169,7 @@ export const ProjectDetailPage = () => {
     }
   };
 
+  // 早期返回必须在所有 hooks 之后
   if (isLoading && !currentProject) return <div className="p-8 text-center">加载中...</div>;
   if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
   if (!currentProject) return <div className="p-8 text-center">项目不存在</div>;
@@ -192,7 +197,18 @@ export const ProjectDetailPage = () => {
     error: 'text-red-600 bg-red-50 border-red-200',
   }[currentProject.status] || 'text-gray-600 bg-gray-50 border-gray-200';
 
-  const contentHeightClass = 'min-h-[520px] h-[calc(100vh-220px)]';
+  // 判断是否为视频文件
+  const isVideo = currentProject.mime_type?.startsWith('video/') ?? false;
+
+  // 根据播放模式动态调整面板高度
+  const getPlayerHeightRatio = () => {
+    if (!isVideo) return 0.3; // 纯音频文件，播放器占30%
+    if (playerMode === 'audio') return 0.3; // 视频文件但音频模式，播放器占30%
+    return 0.6; // 视频模式，播放器占60%
+  };
+
+  const playerHeightRatio = getPlayerHeightRatio();
+  const summaryHeightRatio = 1 - playerHeightRatio;
 
   const handleVersionPanel = () => {
     alert('版本管理面板开发中，待 US-6.5 完成后可切换历史版本');
@@ -202,9 +218,13 @@ export const ProjectDetailPage = () => {
     alert('润色流程开发中，待 US-6.4 集成后可调用 Ollama 润色稿件');
   };
 
+  const handleEditToggle = () => {
+    setIsEditing(!isEditing);
+  };
+
   return (
-    <div className="min-h-screen">
-      <div className="mb-6">
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="flex-shrink-0 mb-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">
             <div>
@@ -227,14 +247,17 @@ export const ProjectDetailPage = () => {
         </div>
       </div>
 
-      <div className={clsx("grid gap-6 lg:grid-cols-12", contentHeightClass)}>
-        <div className={clsx("space-y-6 lg:col-span-6", contentHeightClass)}>
-          <div className="grid h-full gap-6 lg:grid-rows-[minmax(0,0.45fr)_minmax(0,0.55fr)]">
+      <div className="flex-1 grid gap-6 lg:grid-cols-12 overflow-hidden min-h-0">
+        <div className="space-y-6 lg:col-span-6 flex flex-col overflow-hidden min-h-0">
+          <div className="grid h-full gap-6 min-h-0" style={{ gridTemplateRows: `${playerHeightRatio * 100}% ${summaryHeightRatio * 100}%` }}>
             <MediaPlayerPanel
               projectName={currentProject.original_name}
               duration={currentProject.duration}
+              isVideo={isVideo}
+              playerMode={playerMode}
+              onModeChange={setPlayerMode}
             />
-            <div className="h-full overflow-hidden">
+            <div className="h-full overflow-hidden min-h-0">
               <SummaryPanel
                 projectId={currentProject.id}
                 transcriptionExists={!!(currentProject.transcription && currentProject.transcription.content)}
@@ -244,9 +267,9 @@ export const ProjectDetailPage = () => {
           </div>
         </div>
 
-        <div className={clsx("lg:col-span-6", contentHeightClass)}>
+        <div className="lg:col-span-6 flex flex-col overflow-hidden min-h-0">
           <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b">
+            <div className="flex-shrink-0 flex items-center justify-between px-6 pt-6 pb-4 border-b">
               <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
                 <FileText className="w-5 h-5 text-blue-500" />
                 转写内容
@@ -266,32 +289,73 @@ export const ProjectDetailPage = () => {
                   </button>
                 )}
                 {currentProject.status === 'completed' && (
-                  <div className="relative" ref={exportMenuRef}>
-                    {exportMenuOpen && (
-                      <div className="absolute right-0 mt-2 w-40 rounded-xl border border-gray-100 bg-white p-1 text-sm shadow-lg z-20">
-                        {[
-                          { format: 'txt', label: 'TXT 文本' },
-                          { format: 'json', label: 'JSON 数据' },
-                          { format: 'srt', label: 'SRT 字幕' },
-                        ].map((option) => (
-                          <button
-                            key={option.format}
-                            onClick={() => handleExport(option.format as ExportFormat)}
-                            disabled={exportingFormat === option.format}
-                            className={clsx(
-                              'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-gray-50',
-                              exportingFormat === option.format ? 'text-gray-400' : 'text-gray-700'
-                            )}
-                          >
-                            <span>{option.label}</span>
-                            {exportingFormat === option.format && (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <>
+                    <button
+                      onClick={handleEditToggle}
+                      className={clsx(
+                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors",
+                        isEditing
+                          ? "border-blue-400 bg-blue-50 text-blue-600"
+                          : "border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-600"
+                      )}
+                      title={isEditing ? "编辑中" : "进入编辑"}
+                    >
+                      <FileText className="w-4 h-4" />
+                      编辑
+                    </button>
+                    <button
+                      onClick={handleTriggerRefine}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-purple-400 hover:text-purple-600 transition-colors disabled:opacity-40"
+                      disabled
+                      title="AI润色（即将推出）"
+                    >
+                      <span className="text-base">✨</span>
+                      润色
+                    </button>
+                    <button
+                      onClick={handleVersionPanel}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors disabled:opacity-40"
+                      disabled
+                      title="版本管理（即将推出）"
+                    >
+                      <span className="text-base">📋</span>
+                      版本
+                    </button>
+                    <div className="relative" ref={exportMenuRef}>
+                      <button
+                        onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                        title="导出"
+                      >
+                        <Download className="w-4 h-4" />
+                        导出
+                      </button>
+                      {exportMenuOpen && (
+                        <div className="absolute right-0 mt-2 w-40 rounded-xl border border-gray-100 bg-white p-1 text-sm shadow-lg z-20">
+                          {[
+                            { format: 'txt', label: 'TXT 文本' },
+                            { format: 'json', label: 'JSON 数据' },
+                            { format: 'srt', label: 'SRT 字幕' },
+                          ].map((option) => (
+                            <button
+                              key={option.format}
+                              onClick={() => handleExport(option.format as ExportFormat)}
+                              disabled={exportingFormat === option.format}
+                              className={clsx(
+                                'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-gray-50',
+                                exportingFormat === option.format ? 'text-gray-400' : 'text-gray-700'
+                              )}
+                            >
+                              <span>{option.label}</span>
+                              {exportingFormat === option.format && (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -301,9 +365,8 @@ export const ProjectDetailPage = () => {
                 <TranscriptionResult
                   fileId={currentProject.id}
                   className="h-full"
-                  onToggleVersionPanel={handleVersionPanel}
-                  onTriggerRefine={handleTriggerRefine}
-                  onExport={() => setExportMenuOpen(true)}
+                  isEditing={isEditing}
+                  onEditingChange={setIsEditing}
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center text-gray-400">
@@ -336,12 +399,15 @@ export const ProjectDetailPage = () => {
 interface MediaPlayerPanelProps {
   projectName: string;
   duration?: number;
+  isVideo: boolean;
+  playerMode: 'audio' | 'video';
+  onModeChange: (mode: 'audio' | 'video') => void;
 }
 
-const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({ projectName, duration }) => {
+const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({ projectName, duration, isVideo, playerMode, onModeChange }) => {
   return (
-    <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div className="flex items-center justify-between pb-4">
+    <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between pb-4 flex-shrink-0">
         <div>
           <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
             <PlayCircle className="w-5 h-5 text-indigo-500" />
@@ -351,16 +417,44 @@ const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({ projectName, durati
             {duration ? `时长约 ${(duration / 60).toFixed(1)} 分钟` : '等待计算时长'}
           </p>
         </div>
-        <button className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500">
-          <Volume2 className="w-4 h-4" />
-          静音
-        </button>
+        <div className="flex items-center gap-2">
+          {isVideo && (
+            <div className="flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 p-1">
+              <button
+                onClick={() => onModeChange('audio')}
+                className={clsx(
+                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
+                  playerMode === 'audio'
+                    ? "bg-white text-indigo-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                音频
+              </button>
+              <button
+                onClick={() => onModeChange('video')}
+                className={clsx(
+                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
+                  playerMode === 'video'
+                    ? "bg-white text-indigo-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                视频
+              </button>
+            </div>
+          )}
+          <button className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500">
+            <Volume2 className="w-4 h-4" />
+            静音
+          </button>
+        </div>
       </div>
-      <div className="flex flex-1 flex-col rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-400">
+      <div className="flex flex-1 flex-col rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-400 overflow-hidden">
         <div className="flex flex-1 flex-col items-center justify-center gap-2">
           <PlayCircle className="w-10 h-10 text-gray-300" />
           <p>
-            将在此嵌入 <strong>{projectName}</strong> 的音/视频播放器，并支持与段落的联动播放
+            将在此嵌入 <strong>{projectName}</strong> 的{playerMode === 'video' ? '视频' : '音频'}播放器，并支持与段落的联动播放
           </p>
         </div>
         <div className="rounded-md bg-white py-2 px-3 text-xs text-gray-500">

@@ -58,23 +58,29 @@ export const Layout = () => {
             {!isCollapsed && '系统设置'}
           </Link>
         </nav>
-        <button
-          onClick={() => setIsCollapsed(!isCollapsed)}
-          className="mx-3 mb-4 flex items-center justify-center rounded-lg border border-gray-200 py-2 text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors"
-          title={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
-        >
-          {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-        </button>
+        <div className="border-t border-gray-100 p-2">
+          <button
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            className={clsx(
+              "flex w-full items-center rounded-lg py-2 text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors",
+              isCollapsed ? "justify-center" : "px-6"
+            )}
+            title={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
+          >
+            {isCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+            {!isCollapsed && <span className="ml-3 text-sm">收起侧边栏</span>}
+          </button>
+        </div>
         {!isCollapsed && (
-          <div className="p-6 text-xs text-gray-400">
+          <div className="pb-6 px-6 text-xs text-gray-400">
             v1.0.0 (MVP)
           </div>
         )}
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-auto">
-        <div className="p-4 sm:p-6 lg:p-8 mx-auto w-full max-w-[1920px]">
+      <div className="flex-1 overflow-hidden">
+        <div className="h-full p-4 sm:p-6 lg:p-8 mx-auto w-full max-w-[1920px] overflow-hidden">
           <Outlet />
         </div>
       </div>

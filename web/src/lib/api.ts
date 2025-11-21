@@ -13,6 +13,7 @@ export interface Project {
   status: 'pending' | 'extracting' | 'ready_to_transcribe' | 'transcribing' | 'processing' | 'completed' | 'error';
   created_at: string;
   duration?: number; // 音频时长 (秒)
+  mime_type?: string; // MIME类型，用于判断音频/视频
   transcription?: {
     content: any;
     format: string;
