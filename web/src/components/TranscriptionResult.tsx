@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import clsx from 'clsx';
-import { getTranscription, TranscriptionResponse, updateTranscription } from '../lib/api';
+import { getTranscription, TranscriptionResponse, updateTranscription, exportTranscription, ExportFormat, Project } from '../lib/api';
+import { FileText, Copy, Loader2, Download, AlertCircle } from 'lucide-react';
 
 interface Props {
   fileId: number;
@@ -296,7 +297,7 @@ export const TranscriptionResult: React.FC<Props> = ({
   };
 
   return (
-    <div className={clsx("flex h-full flex-col space-y-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm", className)}>
+    <div className={clsx("flex h-full flex-col space-y-4 p-5 pt-0", className)}>
       {/* Header row 1: Stats + Search + Filter */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
         <div className="flex items-center gap-4">
@@ -469,6 +470,200 @@ export const TranscriptionResult: React.FC<Props> = ({
           </button>
         </div>
       )}
+    </div>
+  );
+};
+
+interface TranscriptionPanelProps {
+  project: Project;
+  className?: string;
+  playerRef: React.RefObject<{ seekTo: (time: number) => void }>;
+  currentPlayTime: number;
+}
+
+export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
+  project,
+  className,
+  playerRef,
+  currentPlayTime
+}) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (!exportMenuRef.current) return;
+      if (!exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleExport = async (format: ExportFormat) => {
+    if (!project) return;
+    setExportingFormat(format);
+    try {
+      const { blob, filename } = await exportTranscription(project.id, format);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const fallbackName = `${project.original_name || project.filename || 'transcription'}.${format}`;
+      link.download = filename || fallbackName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert('导出失败，请稍后再试');
+    } finally {
+      setExportingFormat(null);
+      setExportMenuOpen(false);
+    }
+  };
+
+  const handleEditToggle = () => {
+    setIsEditing(!isEditing);
+  };
+
+  const handleTriggerRefine = () => {
+    alert('润色流程开发中，待 US-6.4 集成后可调用 Ollama 润色稿件');
+  };
+
+  const handleVersionPanel = () => {
+    alert('版本管理面板开发中，待 US-6.5 完成后可切换历史版本');
+  };
+
+  return (
+    <div className={clsx("flex h-full flex-col rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden", className)}>
+      {/* Header Section */}
+      <div className="flex-shrink-0 flex items-center justify-between px-6 pt-6 pb-4 border-b">
+        <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
+          <FileText className="w-5 h-5 text-blue-500" />
+          转写内容
+        </h2>
+        <div className="flex items-center gap-2">
+          {project.transcription && (
+            <button
+              className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded hover:bg-blue-50"
+              onClick={() => {
+                const content = project.transcription?.content;
+                const text = typeof content === 'object' ? (content.text || JSON.stringify(content)) : content;
+                navigator.clipboard.writeText(text || '');
+              }}
+              title="复制全文"
+            >
+              <Copy className="w-4 h-4" />
+            </button>
+          )}
+          {project.status === 'completed' && (
+            <>
+              <button
+                onClick={handleEditToggle}
+                className={clsx(
+                  "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors",
+                  isEditing
+                    ? "border-blue-400 bg-blue-50 text-blue-600"
+                    : "border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-600"
+                )}
+                title={isEditing ? "编辑中" : "进入编辑"}
+              >
+                <FileText className="w-4 h-4" />
+                编辑
+              </button>
+              <button
+                onClick={handleTriggerRefine}
+                className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-purple-400 hover:text-purple-600 transition-colors disabled:opacity-40"
+                disabled
+                title="AI润色（即将推出）"
+              >
+                <span className="text-base">✨</span>
+                润色
+              </button>
+              <button
+                onClick={handleVersionPanel}
+                className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors disabled:opacity-40"
+                disabled
+                title="版本管理（即将推出）"
+              >
+                <span className="text-base">📋</span>
+                版本
+              </button>
+              <div className="relative" ref={exportMenuRef}>
+                <button
+                  onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                  title="导出"
+                >
+                  <Download className="w-4 h-4" />
+                  导出
+                </button>
+                {exportMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-40 rounded-xl border border-gray-100 bg-white p-1 text-sm shadow-lg z-20">
+                    {[
+                      { format: 'txt', label: 'TXT 文本' },
+                      { format: 'json', label: 'JSON 数据' },
+                      { format: 'srt', label: 'SRT 字幕' },
+                    ].map((option) => (
+                      <button
+                        key={option.format}
+                        onClick={() => handleExport(option.format as ExportFormat)}
+                        disabled={exportingFormat === option.format}
+                        className={clsx(
+                          'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-gray-50',
+                          exportingFormat === option.format ? 'text-gray-400' : 'text-gray-700'
+                        )}
+                      >
+                        <span>{option.label}</span>
+                        {exportingFormat === option.format && (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Content Section */}
+      <div className="flex-1 overflow-hidden px-6">
+        {project.status === 'completed' ? (
+          <TranscriptionResult
+            fileId={project.id}
+            className="h-full"
+            isEditing={isEditing}
+            onEditingChange={setIsEditing}
+            onSegmentClick={(time) => playerRef.current?.seekTo(time)}
+            currentPlayTime={currentPlayTime}
+          />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center text-gray-400">
+            {project.status === 'error' ? (
+              <>
+                <AlertCircle className="w-12 h-12 text-red-200 mb-2" />
+                <p>转写失败</p>
+              </>
+            ) : (
+              <>
+                <Loader2 className="w-12 h-12 animate-spin text-blue-100 mb-2" />
+                <p>
+                  {project.status === 'extracting' ? '正在提取音频...' :
+                   project.status === 'transcribing' ? '正在AI转写中...' :
+                   '正在处理中，请稍候...'}
+                </p>
+                <p className="text-xs text-gray-300 mt-2">大文件可能需要较长时间</p>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
