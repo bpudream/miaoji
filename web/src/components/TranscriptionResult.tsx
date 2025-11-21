@@ -10,6 +10,7 @@ interface Props {
   onEditingChange?: (editing: boolean) => void; // 编辑状态变化回调
   onSegmentClick?: (time: number) => void; // 段落点击回调，传递时间戳
   currentPlayTime?: number; // 当前播放时间，用于高亮当前段落
+  onStatsChange?: (stats: { segmentCount: number; duration: number | null; lastSaved: Date | null }) => void; // 统计数据变化回调
 }
 
 interface Segment {
@@ -19,7 +20,6 @@ interface Segment {
 }
 
 type FilterMode = 'all' | 'edited';
-type DensityMode = 'comfortable' | 'compact';
 
 export const TranscriptionResult: React.FC<Props> = ({
   fileId,
@@ -27,7 +27,8 @@ export const TranscriptionResult: React.FC<Props> = ({
   isEditing: externalIsEditing,
   onEditingChange,
   onSegmentClick,
-  currentPlayTime = 0
+  currentPlayTime = 0,
+  onStatsChange
 }) => {
   const [data, setData] = useState<TranscriptionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +39,6 @@ export const TranscriptionResult: React.FC<Props> = ({
   const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [density] = useState<DensityMode>('comfortable');
 
   // History for undo/redo
   const [history, setHistory] = useState<Segment[][]>([]);
@@ -123,6 +123,17 @@ export const TranscriptionResult: React.FC<Props> = ({
       }
     }
   }, [data]);
+
+  // 通知父组件统计数据变化
+  useEffect(() => {
+    if (data && onStatsChange) {
+      onStatsChange({
+        segmentCount: segments.length,
+        duration: data.duration || null,
+        lastSaved
+      });
+    }
+  }, [segments.length, data?.duration, lastSaved, onStatsChange]);
 
   const saveSegments = async (currentSegments: Segment[]) => {
     setIsSaving(true);
@@ -249,9 +260,6 @@ export const TranscriptionResult: React.FC<Props> = ({
     return <div className="p-4">Loading...</div>;
   }
 
-  const durationLabel = data.duration ? `${(data.duration / 60).toFixed(1)} min` : '未知时长';
-  const segmentStat = segments.length > 0 ? `${segments.length} 段` : '未检测到段落';
-
   const segmentsWithIndex = segments.map((seg, idx) => ({ ...seg, idx }));
   const filteredSegments = segmentsWithIndex.filter(seg => {
     if (filterMode === 'edited' && !editedSegmentIdsRef.current.has(seg.idx)) {
@@ -297,36 +305,26 @@ export const TranscriptionResult: React.FC<Props> = ({
   };
 
   return (
-    <div className={clsx("flex h-full flex-col space-y-4 p-5 pt-0", className)}>
-      {/* Header row 1: Stats + Search + Filter */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
-        <div className="flex items-center gap-4">
-          <div className="text-sm font-medium text-gray-800">
-            {segmentStat} · {durationLabel}
-          </div>
-          <div className="text-xs text-gray-400">
-            最后更新 {lastSaved ? lastSaved.toLocaleTimeString() : new Date(data.created_at || Date.now()).toLocaleTimeString()}
-          </div>
+    <div className={clsx("flex h-full flex-col p-5 pt-0", className)}>
+      {/* Toolbar: Search + Filter */}
+      <div className="flex-shrink-0 flex items-center gap-3 pb-3">
+        <div className="relative flex-1">
+          <input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="搜索关键词"
+            className="w-full h-9 rounded-full border border-gray-200 px-3 pl-8 text-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+          />
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">⌕</span>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <input
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜索关键词"
-              className="h-9 w-48 rounded-full border border-gray-200 px-3 pl-8 text-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-            />
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">⌕</span>
-          </div>
-          <select
-            value={filterMode}
-            onChange={(e) => setFilterMode(e.target.value as FilterMode)}
-            className="h-9 rounded-full border border-gray-200 bg-white px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-          >
-            <option value="all">全部段落</option>
-            <option value="edited">仅已编辑</option>
-          </select>
-        </div>
+        <select
+          value={filterMode}
+          onChange={(e) => setFilterMode(e.target.value as FilterMode)}
+          className="h-9 rounded-full border border-gray-200 bg-white px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+        >
+          <option value="all">全部段落</option>
+          <option value="edited">仅已编辑</option>
+        </select>
       </div>
 
 
@@ -338,8 +336,8 @@ export const TranscriptionResult: React.FC<Props> = ({
       )}
 
       {data.status === 'completed' && (
-        <div className="flex-1 overflow-hidden">
-          <div className="h-full overflow-y-auto pr-1">
+        <div className="flex-1 overflow-hidden overflow-x-hidden">
+          <div className="h-full overflow-y-auto overflow-x-hidden pr-1">
           {filteredSegments.length > 0 ? (
             <div className="space-y-0.5 relative">
               {searchTerm && (
@@ -357,79 +355,59 @@ export const TranscriptionResult: React.FC<Props> = ({
                   })}
                 </div>
               )}
-               {(() => {
-                 const rows: React.ReactNode[] = [];
-                 let lastBucket = -1;
-                 filteredSegments.forEach((seg) => {
-                   const densityStyles =
-                     density === 'compact'
-                       ? 'px-2 py-1 text-[13px]'
-                       : 'px-3 py-1.5 text-sm';
-                   const bucket = Math.floor(seg.start / 30);
-                   const shouldShowBucket = bucket !== lastBucket;
-                   if (shouldShowBucket) {
-                     rows.push(
-                       <div key={`bucket-${bucket}`} className="sticky top-0 z-10 -mx-3 bg-white/95 px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-300">
-                         第 {bucket * 30}s - {(bucket + 1) * 30}s
-                       </div>
-                     );
-                     lastBucket = bucket;
-                   }
+               {filteredSegments.map((seg) => {
+                 // 判断是否为当前播放段落
+                 const isCurrentSegment = currentPlayTime >= seg.start && currentPlayTime < seg.end;
 
-                   // 判断是否为当前播放段落
-                   const isCurrentSegment = currentPlayTime >= seg.start && currentPlayTime < seg.end;
-
-                   rows.push(
+                 return (
+                   <div
+                     key={seg.idx}
+                     ref={(el) => (segmentRefs.current[seg.idx] = el)}
+                     className={clsx(
+                       `grid grid-cols-1 ${timestampColumnClass} gap-2 px-3 py-1 rounded-lg transition-all break-words`,
+                       isCurrentSegment && !isEditing && 'bg-indigo-50 border-2 border-indigo-200 shadow-sm',
+                       !isCurrentSegment && isEditing && 'bg-blue-50/30',
+                       !isCurrentSegment && !isEditing && 'odd:bg-gray-50/50'
+                     )}
+                   >
                      <div
-                       key={seg.idx}
-                       ref={(el) => (segmentRefs.current[seg.idx] = el)}
-                       className={clsx(
-                         `grid grid-cols-1 ${timestampColumnClass} gap-3 rounded-lg ${densityStyles} transition-all`,
-                         isCurrentSegment && !isEditing && 'bg-indigo-50 border-2 border-indigo-200 shadow-sm',
-                         !isCurrentSegment && isEditing && 'bg-blue-50/30',
-                         !isCurrentSegment && !isEditing && 'odd:bg-gray-50/50'
-                       )}
+                       className="text-[11px] font-mono tracking-[0.06em] text-gray-400 select-none leading-6 flex items-center gap-1 cursor-pointer hover:text-indigo-600 transition-colors"
+                       onClick={() => onSegmentClick?.(seg.start)}
+                       title="点击跳转到此时间"
                      >
-                       <div
-                         className="text-[11px] font-mono tracking-[0.06em] text-gray-400 select-none leading-6 flex items-center gap-1 cursor-pointer hover:text-indigo-600 transition-colors"
-                         onClick={() => onSegmentClick?.(seg.start)}
-                         title="点击跳转到此时间"
-                       >
-                         <span className="h-4 w-px bg-gray-200 hidden sm:inline-block" />
-                         <span>
-                           {formatTimestamp(seg.start)} → {formatTimestamp(seg.end)}
-                         </span>
-                       </div>
-                       {isEditing ? (
-                         <textarea
-                           className="w-full min-h-[2.8rem] rounded-lg border border-gray-200 bg-white/90 px-3 py-2 text-sm leading-6 shadow-inner focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                           value={seg.text}
-                           onChange={(e) => handleSegmentChange(seg.idx, e.target.value)}
-                           onBlur={handleBlur}
-                           rows={Math.max(2, Math.ceil(seg.text.length / 60))}
-                           ref={(el) => (textareaRefs.current[seg.idx] = el)}
-                         />
-                       ) : (
-                         <div
-                           className={clsx(
-                             "rounded-lg px-3 py-1.5 leading-6 text-gray-800 cursor-pointer transition-colors",
-                             isCurrentSegment ? "bg-indigo-50/50" : "hover:bg-gray-100"
-                           )}
-                           onDoubleClick={() => enableEditing(seg.idx)}
-                           onClick={() => onSegmentClick?.(seg.start)}
-                           title="双击编辑，单击跳转"
-                         >
-                           {getHighlightedText(seg.text)}
-                         </div>
-                       )}
+                       <span className="h-4 w-px bg-gray-200 hidden sm:inline-block" />
+                       <span>
+                         {formatTimestamp(seg.start)} → {formatTimestamp(seg.end)}
+                       </span>
                      </div>
-                   );
-                 });
-                 return rows;
-               })()}
+                     {isEditing ? (
+                       <textarea
+                         className="w-full min-h-[2.8rem] rounded-lg border border-gray-200 bg-white/90 px-3 py-2 text-base leading-relaxed shadow-inner focus:border-blue-500 focus:ring-2 focus:ring-blue-200 break-words whitespace-pre-wrap"
+                         value={seg.text}
+                         onChange={(e) => handleSegmentChange(seg.idx, e.target.value)}
+                         onBlur={handleBlur}
+                         rows={Math.max(2, Math.ceil(seg.text.length / 60))}
+                         ref={(el) => (textareaRefs.current[seg.idx] = el)}
+                       />
+                     ) : (
+                       <div
+                         className={clsx(
+                           "rounded-lg px-3 py-0.5 leading-relaxed text-lg text-gray-800 cursor-pointer transition-colors break-words whitespace-pre-wrap",
+                           isCurrentSegment ? "bg-indigo-50/50" : "hover:bg-gray-100"
+                         )}
+                         onDoubleClick={() => enableEditing(seg.idx)}
+                         onClick={() => onSegmentClick?.(seg.start)}
+                         title="双击编辑，单击跳转"
+                       >
+                         {getHighlightedText(seg.text)}
+                       </div>
+                     )}
+                   </div>
+                 );
+               })}
             </div>
           ) : (
-            <div className="bg-gray-50 p-4 rounded whitespace-pre-wrap max-h-96 overflow-y-auto text-sm text-gray-600">
+            <div className="bg-gray-50 p-4 rounded whitespace-pre-wrap max-h-96 overflow-y-auto text-lg text-gray-600 break-words">
                没有符合筛选条件的段落，以下展示原始文本：
                <div className="mt-2 font-mono text-xs text-gray-500">
                  {data.transcription && (typeof data.transcription.content === 'string'
@@ -490,6 +468,7 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
+  const [stats, setStats] = useState<{ segmentCount: number; duration: number | null; lastSaved: Date | null } | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -538,14 +517,31 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
     alert('版本管理面板开发中，待 US-6.5 完成后可切换历史版本');
   };
 
+  const durationLabel = stats?.duration ? `${(stats.duration / 60).toFixed(1)} min` : '未知时长';
+  const segmentStat = stats?.segmentCount ? `${stats.segmentCount} 段` : '';
+
   return (
     <div className={clsx("flex h-full flex-col rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden", className)}>
       {/* Header Section */}
       <div className="flex-shrink-0 flex items-center justify-between px-6 pt-6 pb-4 border-b">
-        <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
-          <FileText className="w-5 h-5 text-blue-500" />
-          转写内容
-        </h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
+            <FileText className="w-5 h-5 text-blue-500" />
+            转写内容
+          </h2>
+          {stats && (
+            <>
+              <span className="text-xs text-gray-500 font-medium bg-gray-50 px-2.5 py-1 rounded-full border border-gray-200">
+                {segmentStat} · {durationLabel}
+              </span>
+              {stats.lastSaved && (
+                <span className="text-xs text-gray-400">
+                  最后更新 {stats.lastSaved.toLocaleTimeString()}
+                </span>
+              )}
+            </>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {project.transcription && (
             <button
@@ -642,6 +638,7 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
             onEditingChange={setIsEditing}
             onSegmentClick={(time) => playerRef.current?.seekTo(time)}
             currentPlayTime={currentPlayTime}
+            onStatsChange={setStats}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-gray-400">
