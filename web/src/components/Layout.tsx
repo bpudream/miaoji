@@ -87,4 +87,3 @@ export const Layout = () => {
     </div>
   );
 };
-

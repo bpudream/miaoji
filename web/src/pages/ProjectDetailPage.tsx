@@ -1,10 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { Clock, FileText, AlertCircle, Loader2, Copy, PlayCircle, Volume2, Download } from 'lucide-react';
+import { Clock, FileText, AlertCircle, Loader2, Copy, Download, ChevronDown, ChevronUp } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionResult } from '../components/TranscriptionResult';
+import { MediaPlayerPanel, MediaPlayerRef } from '../components/MediaPlayer';
 import { exportTranscription, ExportFormat } from '../lib/api';
 
 export const ProjectDetailPage = () => {
@@ -145,6 +146,9 @@ export const ProjectDetailPage = () => {
   // ⚠️ 重要：所有 hooks 必须在早期返回之前调用
   const [playerMode, setPlayerMode] = useState<'audio' | 'video'>('audio'); // 默认音频模式
   const [isEditing, setIsEditing] = useState(false); // 编辑状态，由TranscriptionResult控制
+  const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
+  const playerRef = useRef<MediaPlayerRef>(null);
+  const [currentPlayTime, setCurrentPlayTime] = useState(0);
 
   const handleExport = async (format: ExportFormat) => {
     if (!currentProject) return;
@@ -207,8 +211,12 @@ export const ProjectDetailPage = () => {
     return 0.6; // 视频模式，播放器占60%
   };
 
+  const summaryVisible = !isSummaryCollapsed;
   const playerHeightRatio = getPlayerHeightRatio();
   const summaryHeightRatio = 1 - playerHeightRatio;
+  const gridTemplateRows = summaryVisible
+    ? `${playerHeightRatio * 100}% ${summaryHeightRatio * 100}%`
+    : '1fr';
 
   const handleVersionPanel = () => {
     alert('版本管理面板开发中，待 US-6.5 完成后可切换历史版本');
@@ -222,9 +230,13 @@ export const ProjectDetailPage = () => {
     setIsEditing(!isEditing);
   };
 
+  const handleSummaryToggle = () => {
+    setIsSummaryCollapsed((prev) => !prev);
+  };
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 mb-6">
+      <div className="detail-title-box flex-shrink-0 mb-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">
             <div>
@@ -247,27 +259,62 @@ export const ProjectDetailPage = () => {
         </div>
       </div>
 
-      <div className="flex-1 grid gap-6 lg:grid-cols-12 overflow-hidden min-h-0">
-        <div className="space-y-6 lg:col-span-6 flex flex-col overflow-hidden min-h-0">
-          <div className="grid h-full gap-6 min-h-0" style={{ gridTemplateRows: `${playerHeightRatio * 100}% ${summaryHeightRatio * 100}%` }}>
+      <div className="detail-content-box flex-1 grid gap-6 lg:grid-cols-12 overflow-hidden min-h-0">
+        <div className="detail-content-left-box lg:col-span-6 flex space-y-6 flex-col min-h-0">
+          <div className="detail-content-left-inner-box grid flex-1 space-y-6 min-h-0 overflow-hidden" style={{ gridTemplateRows }}>
             <MediaPlayerPanel
+              projectId={currentProject.id}
               projectName={currentProject.original_name}
               duration={currentProject.duration}
               isVideo={isVideo}
+              hasAudioPath={!!currentProject.audio_path}
               playerMode={playerMode}
               onModeChange={setPlayerMode}
+              playerRef={playerRef}
+              onTimeUpdate={setCurrentPlayTime}
             />
-            <div className="h-full overflow-hidden min-h-0">
-              <SummaryPanel
-                projectId={currentProject.id}
-                transcriptionExists={!!(currentProject.transcription && currentProject.transcription.content)}
-                className="h-full"
-              />
+            <div
+              className={clsx(
+                "detail-content-left-summary-box relative rounded-xl border border-gray-100 bg-white shadow-sm min-h-0 transition-all flex flex-col",
+                summaryVisible ? "pt-6" : "hidden"
+              )}
+            >
+              <button
+                onClick={handleSummaryToggle}
+                className={clsx(
+                  "detail-content-left-summary-toggle-button absolute left-1/2 -translate-x-1/2 -top-2.5 flex items-center gap-1 rounded-full border bg-white px-4 py-1.5 text-xs font-medium shadow transition-all z-30",
+                  summaryVisible
+                    ? "border-purple-200 text-purple-500 hover:bg-purple-50"
+                    : "border-gray-200 text-gray-500 hover:bg-gray-50"
+                )}
+                title={summaryVisible ? "收起 AI 总结" : "展开 AI 总结"}
+              >
+                {summaryVisible ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+              </button>
+              <div className="detail-content-left-summary-content-box flex-1 overflow-hidden px-5 pb-5 min-h-0">
+                <SummaryPanel
+                  projectId={currentProject.id}
+                  transcriptionExists={!!(currentProject.transcription && currentProject.transcription.content)}
+                  className="h-full"
+                />
+              </div>
             </div>
           </div>
+          {!summaryVisible && (
+            <div className="detail-content-left-summary-replacement-box relative rounded-xl border border-dashed border-gray-200 bg-white py-8 text-sm text-gray-400 text-center">
+              <button
+                onClick={handleSummaryToggle}
+                className="absolute left-1/2 -translate-x-1/2 -top-2.5 flex items-center gap-1 rounded-full border bg-white px-4 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-50 transition-all shadow z-30"
+                title="展开 AI 总结"
+              >
+                <ChevronUp className="w-4 h-4" />
+              </button>
+              AI 总结已折叠，点击上方按钮展开
+            </div>
+          )}
         </div>
 
-        <div className="lg:col-span-6 flex flex-col overflow-hidden min-h-0">
+        <div className="detail-content-right-box lg:col-span-6 flex flex-col overflow-hidden min-h-0">
           <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between px-6 pt-6 pb-4 border-b">
               <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
@@ -367,6 +414,8 @@ export const ProjectDetailPage = () => {
                   className="h-full"
                   isEditing={isEditing}
                   onEditingChange={setIsEditing}
+                  onSegmentClick={(time) => playerRef.current?.seekTo(time)}
+                  currentPlayTime={currentPlayTime}
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center text-gray-400">
@@ -396,71 +445,3 @@ export const ProjectDetailPage = () => {
   );
 };
 
-interface MediaPlayerPanelProps {
-  projectName: string;
-  duration?: number;
-  isVideo: boolean;
-  playerMode: 'audio' | 'video';
-  onModeChange: (mode: 'audio' | 'video') => void;
-}
-
-const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({ projectName, duration, isVideo, playerMode, onModeChange }) => {
-  return (
-    <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between pb-4 flex-shrink-0">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-            <PlayCircle className="w-5 h-5 text-indigo-500" />
-            播放器
-          </h2>
-          <p className="text-xs text-gray-400 mt-1">
-            {duration ? `时长约 ${(duration / 60).toFixed(1)} 分钟` : '等待计算时长'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {isVideo && (
-            <div className="flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 p-1">
-              <button
-                onClick={() => onModeChange('audio')}
-                className={clsx(
-                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
-                  playerMode === 'audio'
-                    ? "bg-white text-indigo-600 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                )}
-              >
-                音频
-              </button>
-              <button
-                onClick={() => onModeChange('video')}
-                className={clsx(
-                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
-                  playerMode === 'video'
-                    ? "bg-white text-indigo-600 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                )}
-              >
-                视频
-              </button>
-            </div>
-          )}
-          <button className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500">
-            <Volume2 className="w-4 h-4" />
-            静音
-          </button>
-        </div>
-      </div>
-      <div className="flex flex-1 flex-col rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-400 overflow-hidden">
-        <div className="flex flex-1 flex-col items-center justify-center gap-2">
-          <PlayCircle className="w-10 h-10 text-gray-300" />
-          <p>
-            将在此嵌入 <strong>{projectName}</strong> 的{playerMode === 'video' ? '视频' : '音频'}播放器，并支持与段落的联动播放
-          </p>
-        </div>
-        <div className="rounded-md bg-white py-2 px-3 text-xs text-gray-500">
-          未来可直接点击段落跳转到对应时间，播放器自动保持同步
-        </div>
-      </div>
-    </div>
-  );
-};

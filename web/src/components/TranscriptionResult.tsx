@@ -7,6 +7,8 @@ interface Props {
   className?: string;
   isEditing?: boolean; // 外部控制的编辑状态
   onEditingChange?: (editing: boolean) => void; // 编辑状态变化回调
+  onSegmentClick?: (time: number) => void; // 段落点击回调，传递时间戳
+  currentPlayTime?: number; // 当前播放时间，用于高亮当前段落
 }
 
 interface Segment {
@@ -18,7 +20,14 @@ interface Segment {
 type FilterMode = 'all' | 'edited';
 type DensityMode = 'comfortable' | 'compact';
 
-export const TranscriptionResult: React.FC<Props> = ({ fileId, className, isEditing: externalIsEditing, onEditingChange }) => {
+export const TranscriptionResult: React.FC<Props> = ({
+  fileId,
+  className,
+  isEditing: externalIsEditing,
+  onEditingChange,
+  onSegmentClick,
+  currentPlayTime = 0
+}) => {
   const [data, setData] = useState<TranscriptionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -37,6 +46,7 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, isEdit
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoad = useRef(true);
   const textareaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
+  const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
   const originalSegmentsRef = useRef<Segment[]>([]);
   const editedSegmentIdsRef = useRef<Set<number>>(new Set());
 
@@ -186,6 +196,21 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, isEdit
       setIsEditing(externalIsEditing);
     }
   }, [externalIsEditing]);
+
+  // 自动滚动到当前播放段落
+  useEffect(() => {
+    if (currentPlayTime > 0) {
+      const currentIndex = segments.findIndex(
+        seg => currentPlayTime >= seg.start && currentPlayTime < seg.end
+      );
+      if (currentIndex >= 0 && segmentRefs.current[currentIndex]) {
+        segmentRefs.current[currentIndex]?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        });
+      }
+    }
+  }, [currentPlayTime, segments]);
 
   const enableEditing = (focusIndex?: number) => {
     const newEditingState = true;
@@ -350,14 +375,25 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, isEdit
                      lastBucket = bucket;
                    }
 
+                   // 判断是否为当前播放段落
+                   const isCurrentSegment = currentPlayTime >= seg.start && currentPlayTime < seg.end;
+
                    rows.push(
                      <div
                        key={seg.idx}
-                       className={`grid grid-cols-1 ${timestampColumnClass} gap-3 rounded-lg ${densityStyles} transition-colors ${
-                         isEditing ? 'bg-blue-50/30' : 'odd:bg-gray-50/50'
-                       }`}
+                       ref={(el) => (segmentRefs.current[seg.idx] = el)}
+                       className={clsx(
+                         `grid grid-cols-1 ${timestampColumnClass} gap-3 rounded-lg ${densityStyles} transition-all`,
+                         isCurrentSegment && !isEditing && 'bg-indigo-50 border-2 border-indigo-200 shadow-sm',
+                         !isCurrentSegment && isEditing && 'bg-blue-50/30',
+                         !isCurrentSegment && !isEditing && 'odd:bg-gray-50/50'
+                       )}
                      >
-                       <div className="text-[11px] font-mono tracking-[0.06em] text-gray-400 select-none leading-6 flex items-center gap-1">
+                       <div
+                         className="text-[11px] font-mono tracking-[0.06em] text-gray-400 select-none leading-6 flex items-center gap-1 cursor-pointer hover:text-indigo-600 transition-colors"
+                         onClick={() => onSegmentClick?.(seg.start)}
+                         title="点击跳转到此时间"
+                       >
                          <span className="h-4 w-px bg-gray-200 hidden sm:inline-block" />
                          <span>
                            {formatTimestamp(seg.start)} → {formatTimestamp(seg.end)}
@@ -374,8 +410,13 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, isEdit
                          />
                        ) : (
                          <div
-                           className="rounded-lg px-3 py-1.5 leading-6 text-gray-800 cursor-text"
+                           className={clsx(
+                             "rounded-lg px-3 py-1.5 leading-6 text-gray-800 cursor-pointer transition-colors",
+                             isCurrentSegment ? "bg-indigo-50/50" : "hover:bg-gray-100"
+                           )}
                            onDoubleClick={() => enableEditing(seg.idx)}
+                           onClick={() => onSegmentClick?.(seg.start)}
+                           title="双击编辑，单击跳转"
                          >
                            {getHighlightedText(seg.text)}
                          </div>

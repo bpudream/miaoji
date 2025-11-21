@@ -262,6 +262,7 @@ export const buildApp = () => {
       created_at: file.created_at,
       duration: file.duration, // ✅ 添加 duration 字段
       mime_type: file.mime_type, // ✅ 添加 mime_type 字段用于判断音频/视频
+      audio_path: file.audio_path, // ✅ 添加 audio_path 字段，用于播放提取的音频
       transcription
     };
   });
@@ -429,6 +430,63 @@ export const buildApp = () => {
     const pad = (num: number, len: number) => num.toString().padStart(len, '0');
     return `${pad(hours, 2)}:${pad(minutes, 2)}:${pad(secs, 2)},${pad(ms, 3)}`;
   };
+
+  // 提供媒体文件访问
+  fastify.get('/api/projects/:id/media', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { type } = request.query as { type?: 'original' | 'audio' };
+
+    const fileStmt = db.prepare('SELECT filepath, audio_path, mime_type FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as { filepath: string; audio_path?: string; mime_type?: string };
+
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    // 根据 type 参数决定返回原始文件还是音频文件
+    let mediaPath: string;
+    let mediaMimeType: string;
+
+    if (type === 'audio' && file.audio_path) {
+      mediaPath = file.audio_path;
+      mediaMimeType = 'audio/wav'; // 提取的音频是 16kHz WAV
+    } else {
+      mediaPath = file.filepath;
+      mediaMimeType = file.mime_type || 'application/octet-stream';
+    }
+
+    if (!fs.existsSync(mediaPath)) {
+      return reply.code(404).send({ error: 'Media file not found' });
+    }
+
+    // 设置正确的 Content-Type
+    reply.type(mediaMimeType || 'application/octet-stream');
+
+    // 支持 Range 请求（用于视频/音频的流式播放）
+    const stats = fs.statSync(mediaPath);
+    const fileSize = stats.size;
+    const range = request.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0] || '0', 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
+      const file = fs.createReadStream(mediaPath, { start, end });
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': mediaMimeType,
+      };
+      reply.code(206).headers(head);
+      return file;
+    } else {
+      reply.header('Content-Length', fileSize);
+      reply.header('Accept-Ranges', 'bytes');
+      return fs.createReadStream(mediaPath);
+    }
+  });
 
   fastify.get('/api/projects/:id/export', async (request, reply) => {
     const { id } = request.params as { id: string };

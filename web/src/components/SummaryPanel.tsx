@@ -63,7 +63,7 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
 
   if (!transcriptionExists) {
     return (
-      <div className={clsx("flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm", className)}>
+      <div className={clsx("summary-real-panel-box flex-1 flex flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm", className)}>
          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-800">
             <Sparkles className="w-5 h-5 text-purple-500" />
             AI 总结
@@ -88,8 +88,8 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
   };
 
   return (
-    <div className={clsx("flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b pb-3">
+    <div className={clsx("summary-real-panel-box flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm", className)}>
+      <div className="summary-real-panel-header-box flex flex-wrap items-center justify-between gap-3 mb-4 border-b pb-3">
         <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
           <Sparkles className="w-5 h-5 text-purple-500" />
           AI 总结
@@ -121,7 +121,7 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
         </div>
       </div>
 
-      <div className="flex-1 min-h-[200px] overflow-hidden">
+      <div className="summary-real-panel-content-box flex-1 min-h-[200px] overflow-hidden">
         <div className="h-full overflow-y-auto pr-1">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-48 text-purple-600">
@@ -162,7 +162,7 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
       </div>
 
       {summary && !loading && (
-         <div className="mt-4 flex justify-end">
+         <div className="summary-real-panel-footer-box mt-4 flex justify-end">
             <button
               onClick={handleGenerate}
               className="text-xs text-gray-400 hover:text-purple-600 flex items-center gap-1"

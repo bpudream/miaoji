@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:3000/api';
+export const API_URL = 'http://localhost:3000/api';
 
 export const api = axios.create({
   baseURL: API_URL,
@@ -14,6 +14,7 @@ export interface Project {
   created_at: string;
   duration?: number; // 音频时长 (秒)
   mime_type?: string; // MIME类型，用于判断音频/视频
+  audio_path?: string; // 提取的音频文件路径
   transcription?: {
     content: any;
     format: string;
