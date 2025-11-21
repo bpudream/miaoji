@@ -135,7 +135,7 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
             <button onClick={handleGenerate} className="mt-2 text-xs underline hover:text-red-700">重试</button>
           </div>
         ) : summary ? (
-           <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed prose-headings:text-gray-900 prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-gray-900">
+           <div className="prose max-w-none text-gray-700 leading-relaxed prose-headings:text-gray-900 prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-gray-900">
              <ReactMarkdown>{cleanSummary(summary)}</ReactMarkdown>
            </div>
         ) : (
