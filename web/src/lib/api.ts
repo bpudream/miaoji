@@ -98,3 +98,7 @@ export const getSummary = async (id: number, mode?: SummaryMode): Promise<Summar
     const response = await api.get<Summary>(`/projects/${id}/summary`, { params: { mode } });
     return response.data;
 }
+
+export const updateTranscription = async (id: number, segments: any[]): Promise<void> => {
+  await api.put(`/projects/${id}/transcription`, { segments });
+};

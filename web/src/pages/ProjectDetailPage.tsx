@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/useAppStore';
 import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
+import { TranscriptionResult } from '../components/TranscriptionResult';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -209,16 +210,7 @@ export const ProjectDetailPage = () => {
             </div>
 
             {currentProject.status === 'completed' ? (
-              <div className="prose max-w-none text-gray-700 whitespace-pre-wrap leading-relaxed">
-                {(() => {
-                  const content = currentProject.transcription?.content;
-                  if (!content) return '转写内容为空';
-                  if (typeof content === 'object') {
-                    return content.text || JSON.stringify(content, null, 2);
-                  }
-                  return content;
-                })()}
-              </div>
+              <TranscriptionResult fileId={currentProject.id} />
             ) : (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
                 {currentProject.status === 'error' ? (

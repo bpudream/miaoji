@@ -150,6 +150,39 @@ export const buildApp = () => {
     };
   });
 
+  // 更新转写结果
+  fastify.put('/api/projects/:id/transcription', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { segments } = request.body as { segments: any[] };
+
+    if (!segments || !Array.isArray(segments)) {
+      return reply.code(400).send({ error: 'Invalid segments data' });
+    }
+
+    const transStmt = db.prepare('SELECT * FROM transcriptions WHERE media_file_id = ?');
+    const existingTrans = transStmt.get(id) as any;
+
+    if (!existingTrans) {
+      return reply.code(404).send({ error: 'Transcription not found' });
+    }
+
+    let content: any = {};
+    try {
+      content = existingTrans.format === 'json' ? JSON.parse(existingTrans.content) : {};
+    } catch (e) {
+      // ignore
+    }
+
+    // Update segments and regenerate full text
+    content.segments = segments;
+    content.text = segments.map(s => s.text).join('');
+
+    const updateStmt = db.prepare('UPDATE transcriptions SET content = ? WHERE media_file_id = ?');
+    updateStmt.run(JSON.stringify(content), id);
+
+    return { status: 'success', transcription: { ...existingTrans, content } };
+  });
+
   // 获取项目列表
   fastify.get('/api/projects', async (request, reply) => {
     const { page = 1, pageSize = 10, status } = request.query as { page?: number, pageSize?: number, status?: string };
@@ -214,7 +247,9 @@ export const buildApp = () => {
           ...result,
           content: result.format === 'json' ? JSON.parse(result.content) : result.content
         };
+        console.log(`[API] Fetched transcription for ${id}. Format: ${result.format}, Content Type: ${typeof transcription.content}`);
       } catch (e) {
+        console.error(`[API] Failed to parse transcription content for ${id}:`, e);
         transcription = result;
       }
     }
@@ -399,6 +434,10 @@ export const buildApp = () => {
       WHERE id = ?
     `);
     updateStmt.run(id);
+
+    // 清理旧的转写和总结，防止数据冲突
+    db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
+    db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
 
     // 重新加入队列
     // 如果原始文件不存在了，队列处理时会报错，循环进入 error 状态，这是合理的
