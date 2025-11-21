@@ -1,10 +1,17 @@
-import React from 'react';
+import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Upload, Settings } from 'lucide-react';
+import { LayoutDashboard, Upload, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 
 export const Layout = () => {
   const location = useLocation();
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  // Auto-collapse on project detail page
+  useEffect(() => {
+    const isDetailPage = location.pathname.startsWith('/projects/');
+    setIsCollapsed(isDetailPage);
+  }, [location.pathname]);
 
   const isActive = (path: string) => {
     return location.pathname === path ? 'bg-blue-50 text-blue-600 border-r-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50';
@@ -13,38 +20,50 @@ export const Layout = () => {
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Sidebar */}
-      <div className="w-64 bg-white shadow-md flex flex-col">
+      <div className={clsx("bg-white shadow-md flex flex-col transition-all duration-300", isCollapsed ? "w-16" : "w-64")}>
         <div className="p-6">
-          <h1 className="text-2xl font-bold text-blue-600 flex items-center gap-2">
-            <span>🎙️</span> 妙记 AI
+          <h1 className={clsx("text-2xl font-bold text-blue-600 flex items-center gap-2 transition-all", isCollapsed && "justify-center")}>
+            <span>🎙️</span> {!isCollapsed && '妙记 AI'}
           </h1>
         </div>
         <nav className="mt-6 flex-1">
           <Link
             to="/"
-            className={clsx("flex items-center px-6 py-3 transition-colors", isActive('/'))}
+            className={clsx("flex items-center px-6 py-3 transition-colors", isActive('/'), isCollapsed && "justify-center px-3")}
+            title="项目列表"
           >
-            <LayoutDashboard className="w-5 h-5 mr-3" />
-            项目列表
+            <LayoutDashboard className={clsx("w-5 h-5", !isCollapsed && "mr-3")} />
+            {!isCollapsed && '项目列表'}
           </Link>
           <Link
             to="/upload"
-            className={clsx("flex items-center px-6 py-3 transition-colors", isActive('/upload'))}
+            className={clsx("flex items-center px-6 py-3 transition-colors", isActive('/upload'), isCollapsed && "justify-center px-3")}
+            title="新建上传"
           >
-            <Upload className="w-5 h-5 mr-3" />
-            新建上传
+            <Upload className={clsx("w-5 h-5", !isCollapsed && "mr-3")} />
+            {!isCollapsed && '新建上传'}
           </Link>
           <Link
             to="/settings"
-            className={clsx("flex items-center px-6 py-3 transition-colors", isActive('/settings'))}
+            className={clsx("flex items-center px-6 py-3 transition-colors", isActive('/settings'), isCollapsed && "justify-center px-3")}
+            title="系统设置"
           >
-            <Settings className="w-5 h-5 mr-3" />
-            系统设置
+            <Settings className={clsx("w-5 h-5", !isCollapsed && "mr-3")} />
+            {!isCollapsed && '系统设置'}
           </Link>
         </nav>
-        <div className="p-6 text-xs text-gray-400">
-          v1.0.0 (MVP)
-        </div>
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="mx-3 mb-4 flex items-center justify-center rounded-lg border border-gray-200 py-2 text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors"
+          title={isCollapsed ? "展开侧边栏" : "收起侧边栏"}
+        >
+          {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+        </button>
+        {!isCollapsed && (
+          <div className="p-6 text-xs text-gray-400">
+            v1.0.0 (MVP)
+          </div>
+        )}
       </div>
 
       {/* Main Content */}

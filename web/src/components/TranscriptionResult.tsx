@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import clsx from 'clsx';
+import { FileText, Download } from 'lucide-react';
 import { getTranscription, TranscriptionResponse, updateTranscription } from '../lib/api';
 
 interface Props {
@@ -7,6 +8,7 @@ interface Props {
   className?: string;
   onToggleVersionPanel?: () => void;
   onTriggerRefine?: () => void;
+  onExport?: () => void;
 }
 
 interface Segment {
@@ -18,7 +20,7 @@ interface Segment {
 type FilterMode = 'all' | 'edited';
 type DensityMode = 'comfortable' | 'compact';
 
-export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onToggleVersionPanel, onTriggerRefine }) => {
+export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onToggleVersionPanel, onTriggerRefine, onExport }) => {
   const [data, setData] = useState<TranscriptionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -28,7 +30,7 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
   const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [density, setDensity] = useState<DensityMode>('comfortable');
+  const [density] = useState<DensityMode>('comfortable');
 
   // History for undo/redo
   const [history, setHistory] = useState<Segment[][]>([]);
@@ -257,8 +259,9 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
 
   return (
     <div className={clsx("flex h-full flex-col space-y-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b pb-3">
-        <div>
+      {/* Header row 1: Stats + Search + Filter */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+        <div className="flex items-center gap-4">
           <div className="text-sm font-medium text-gray-800">
             {segmentStat} · {durationLabel}
           </div>
@@ -266,13 +269,13 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
             最后更新 {lastSaved ? lastSaved.toLocaleTimeString() : new Date(data.created_at || Date.now()).toLocaleTimeString()}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
+        <div className="flex items-center gap-2">
           <div className="relative">
             <input
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜索段落或关键词"
-              className="h-9 rounded-full border border-gray-200 px-3 pl-8 text-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+              placeholder="搜索关键词"
+              className="h-9 w-48 rounded-full border border-gray-200 px-3 pl-8 text-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
             />
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">⌕</span>
           </div>
@@ -282,38 +285,52 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onTogg
             className="h-9 rounded-full border border-gray-200 bg-white px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
           >
             <option value="all">全部段落</option>
-            <option value="edited">仅显示已编辑</option>
+            <option value="edited">仅已编辑</option>
           </select>
-          <button
-            onClick={() => setDensity(density === 'comfortable' ? 'compact' : 'comfortable')}
-            className="h-9 rounded-full border border-gray-200 px-3 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600"
-          >
-            {density === 'comfortable' ? '紧凑视图' : '舒适视图'}
-          </button>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onToggleVersionPanel}
-              className="h-9 rounded-full border border-gray-200 px-3 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600"
-            >
-              版本切换
-            </button>
-            <button
-              onClick={onTriggerRefine}
-              className="h-9 rounded-full border border-purple-200 bg-purple-50 px-3 text-sm text-purple-600 hover:bg-purple-100 hover:text-purple-700"
-            >
-              润色（占位）
-            </button>
-            {data.status === 'completed' && segments.length > 0 && (
-              <button
-                onClick={() => enableEditing()}
-                className="h-9 rounded-full border border-gray-300 px-4 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
-              >
-                {isEditing ? '编辑中' : '进入编辑'}
-              </button>
-            )}
-          </div>
         </div>
       </div>
+
+      {/* Header row 2: Action buttons (Edit, Refine, Version, Export) */}
+      {data.status === 'completed' && segments.length > 0 && (
+        <div className="flex items-center gap-2 -mt-2">
+          <button
+            onClick={() => enableEditing()}
+            className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+            title={isEditing ? "编辑中" : "进入编辑"}
+          >
+            <FileText className="w-4 h-4" />
+            编辑
+          </button>
+          <button
+            onClick={onTriggerRefine}
+            className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-purple-400 hover:text-purple-600 transition-colors disabled:opacity-40"
+            disabled
+            title="AI润色（即将推出）"
+          >
+            <span className="text-base">✨</span>
+            润色
+          </button>
+          <button
+            onClick={onToggleVersionPanel}
+            className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors disabled:opacity-40"
+            disabled
+            title="版本管理（即将推出）"
+          >
+            <span className="text-base">📋</span>
+            版本
+          </button>
+          {onExport && (
+            <button
+              onClick={onExport}
+              className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+              title="导出"
+            >
+              <Download className="w-4 h-4" />
+              导出
+            </button>
+          )}
+        </div>
+      )}
 
       {data.status === 'processing' && (
          <div className="flex items-center space-x-2 text-blue-600">

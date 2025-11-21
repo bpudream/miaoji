@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy, Download, PlayCircle, Volume2 } from 'lucide-react';
+import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy, PlayCircle, Volume2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionResult } from '../components/TranscriptionResult';
@@ -203,12 +203,16 @@ export const ProjectDetailPage = () => {
   };
 
   return (
-    <div className="min-h-screen">
-      <div className="mb-6">
-        <Link to="/" className="text-gray-500 hover:text-gray-900 flex items-center gap-1 mb-4 transition-colors w-fit">
-          <ArrowLeft className="w-4 h-4" /> 返回列表
-        </Link>
+    <div className="min-h-screen relative">
+      {/* Floating back button */}
+      <Link
+        to="/"
+        className="fixed top-6 left-6 z-50 flex items-center gap-1 rounded-full bg-white/90 backdrop-blur-sm px-4 py-2 text-sm text-gray-600 shadow-lg border border-gray-200 hover:bg-white hover:text-gray-900 hover:shadow-xl transition-all"
+      >
+        <ArrowLeft className="w-4 h-4" /> 返回列表
+      </Link>
 
+      <div className="mb-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">
             <div>
@@ -249,8 +253,8 @@ export const ProjectDetailPage = () => {
         </div>
 
         <div className={clsx("lg:col-span-6", contentHeightClass)}>
-          <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
+          <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b">
               <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
                 <FileText className="w-5 h-5 text-blue-500" />
                 转写内容
@@ -271,16 +275,6 @@ export const ProjectDetailPage = () => {
                 )}
                 {currentProject.status === 'completed' && (
                   <div className="relative" ref={exportMenuRef}>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExportMenuOpen((prev) => !prev);
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
-                    >
-                      <Download className="w-4 h-4" />
-                      导出
-                    </button>
                     {exportMenuOpen && (
                       <div className="absolute right-0 mt-2 w-40 rounded-xl border border-gray-100 bg-white p-1 text-sm shadow-lg z-20">
                         {[
@@ -310,13 +304,14 @@ export const ProjectDetailPage = () => {
               </div>
             </div>
 
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 overflow-hidden px-6">
               {currentProject.status === 'completed' ? (
                 <TranscriptionResult
                   fileId={currentProject.id}
                   className="h-full"
                   onToggleVersionPanel={handleVersionPanel}
                   onTriggerRefine={handleTriggerRefine}
+                  onExport={() => setExportMenuOpen(true)}
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center text-gray-400">
