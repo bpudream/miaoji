@@ -1,8 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import clsx from 'clsx';
 import { getTranscription, TranscriptionResponse, updateTranscription } from '../lib/api';
 
 interface Props {
   fileId: number;
+  className?: string;
+  onToggleVersionPanel?: () => void;
+  onTriggerRefine?: () => void;
 }
 
 interface Segment {
@@ -14,7 +18,7 @@ interface Segment {
 type FilterMode = 'all' | 'edited';
 type DensityMode = 'comfortable' | 'compact';
 
-export const TranscriptionResult: React.FC<Props> = ({ fileId }) => {
+export const TranscriptionResult: React.FC<Props> = ({ fileId, className, onToggleVersionPanel, onTriggerRefine }) => {
   const [data, setData] = useState<TranscriptionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -252,7 +256,7 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId }) => {
   };
 
   return (
-    <div className="mt-4 p-5 border rounded-xl shadow-sm bg-white space-y-4">
+    <div className={clsx("flex h-full flex-col space-y-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm", className)}>
       <div className="flex flex-wrap items-center justify-between gap-4 border-b pb-3">
         <div>
           <div className="text-sm font-medium text-gray-800">
@@ -286,14 +290,28 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId }) => {
           >
             {density === 'comfortable' ? '紧凑视图' : '舒适视图'}
           </button>
-          {data.status === 'completed' && segments.length > 0 && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => enableEditing()}
-              className="h-9 rounded-full border border-gray-300 px-4 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+              onClick={onToggleVersionPanel}
+              className="h-9 rounded-full border border-gray-200 px-3 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600"
             >
-              {isEditing ? '编辑中' : '进入编辑'}
+              版本切换
             </button>
-          )}
+            <button
+              onClick={onTriggerRefine}
+              className="h-9 rounded-full border border-purple-200 bg-purple-50 px-3 text-sm text-purple-600 hover:bg-purple-100 hover:text-purple-700"
+            >
+              润色（占位）
+            </button>
+            {data.status === 'completed' && segments.length > 0 && (
+              <button
+                onClick={() => enableEditing()}
+                className="h-9 rounded-full border border-gray-300 px-4 text-sm text-gray-700 hover:border-blue-400 hover:text-blue-600 transition-colors"
+              >
+                {isEditing ? '编辑中' : '进入编辑'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -305,9 +323,25 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId }) => {
       )}
 
       {data.status === 'completed' && (
-        <div className="mt-4">
+        <div className="flex-1 overflow-hidden">
+          <div className="h-full overflow-y-auto pr-1">
           {filteredSegments.length > 0 ? (
-            <div className="space-y-0.5">
+            <div className="space-y-0.5 relative">
+              {searchTerm && (
+                <div className="absolute right-0 top-0 bottom-0 w-2 rounded-full bg-gray-100">
+                  {filteredSegments.map((seg) => {
+                    const ratio = seg.idx / segments.length;
+                    if (!seg.text.toLowerCase().includes(searchTerm.toLowerCase())) return null;
+                    return (
+                      <span
+                        key={`marker-${seg.idx}`}
+                        className="absolute left-0 right-0 rounded-full bg-yellow-400/70"
+                        style={{ top: `calc(${ratio * 100}% - 4px)`, height: '6px' }}
+                      />
+                    );
+                  })}
+                </div>
+              )}
                {(() => {
                  const rows: React.ReactNode[] = [];
                  let lastBucket = -1;
@@ -373,6 +407,7 @@ export const TranscriptionResult: React.FC<Props> = ({ fileId }) => {
                </div>
             </div>
           )}
+          </div>
         </div>
       )}
       {isEditing && (

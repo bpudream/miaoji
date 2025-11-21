@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy, Download } from 'lucide-react';
+import { ArrowLeft, Clock, FileText, AlertCircle, Loader2, Copy, Download, PlayCircle, Volume2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionResult } from '../components/TranscriptionResult';
@@ -192,8 +192,18 @@ export const ProjectDetailPage = () => {
     error: 'text-red-600 bg-red-50 border-red-200',
   }[currentProject.status] || 'text-gray-600 bg-gray-50 border-gray-200';
 
+  const contentHeightClass = 'min-h-[520px] h-[calc(100vh-220px)]';
+
+  const handleVersionPanel = () => {
+    alert('版本管理面板开发中，待 US-6.5 完成后可切换历史版本');
+  };
+
+  const handleTriggerRefine = () => {
+    alert('润色流程开发中，待 US-6.4 集成后可调用 Ollama 润色稿件');
+  };
+
   return (
-    <div>
+    <div className="min-h-screen">
       <div className="mb-6">
         <Link to="/" className="text-gray-500 hover:text-gray-900 flex items-center gap-1 mb-4 transition-colors w-fit">
           <ArrowLeft className="w-4 h-4" /> 返回列表
@@ -221,10 +231,25 @@ export const ProjectDetailPage = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-12 gap-6">
-        <div className="lg:col-span-2 xl:col-span-7 2xl:col-span-8 space-y-6">
-          {/* Transcription Content */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 min-h-[400px] h-full">
+      <div className={clsx("grid gap-6 lg:grid-cols-12", contentHeightClass)}>
+        <div className={clsx("space-y-6 lg:col-span-6", contentHeightClass)}>
+          <div className="grid h-full gap-6 lg:grid-rows-[minmax(0,0.45fr)_minmax(0,0.55fr)]">
+            <MediaPlayerPanel
+              projectName={currentProject.original_name}
+              duration={currentProject.duration}
+            />
+            <div className="h-full overflow-hidden">
+              <SummaryPanel
+                projectId={currentProject.id}
+                transcriptionExists={!!(currentProject.transcription && currentProject.transcription.content)}
+                className="h-full"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className={clsx("lg:col-span-6", contentHeightClass)}>
+          <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
                 <FileText className="w-5 h-5 text-blue-500" />
@@ -285,38 +310,74 @@ export const ProjectDetailPage = () => {
               </div>
             </div>
 
-            {currentProject.status === 'completed' ? (
-              <TranscriptionResult fileId={currentProject.id} />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-                {currentProject.status === 'error' ? (
-                  <>
-                    <AlertCircle className="w-12 h-12 text-red-200 mb-2" />
-                    <p>转写失败</p>
-                    {/* 显示错误信息（如果 API 返回了 error_message 字段，目前类型没加，暂不显示） */}
-                  </>
-                ) : (
-                  <>
-                    <Loader2 className="w-12 h-12 animate-spin text-blue-100 mb-2" />
-                    <p>
-                      {currentProject.status === 'extracting' ? '正在提取音频...' :
-                       currentProject.status === 'transcribing' ? '正在AI转写中...' :
-                       '正在处理中，请稍候...'}
-                    </p>
-                    <p className="text-xs text-gray-300 mt-2">大文件可能需要较长时间</p>
-                  </>
-                )}
-              </div>
-            )}
+            <div className="flex-1 overflow-hidden">
+              {currentProject.status === 'completed' ? (
+                <TranscriptionResult
+                  fileId={currentProject.id}
+                  className="h-full"
+                  onToggleVersionPanel={handleVersionPanel}
+                  onTriggerRefine={handleTriggerRefine}
+                />
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center text-gray-400">
+                  {currentProject.status === 'error' ? (
+                    <>
+                      <AlertCircle className="w-12 h-12 text-red-200 mb-2" />
+                      <p>转写失败</p>
+                    </>
+                  ) : (
+                    <>
+                      <Loader2 className="w-12 h-12 animate-spin text-blue-100 mb-2" />
+                      <p>
+                        {currentProject.status === 'extracting' ? '正在提取音频...' :
+                         currentProject.status === 'transcribing' ? '正在AI转写中...' :
+                         '正在处理中，请稍候...'}
+                      </p>
+                      <p className="text-xs text-gray-300 mt-2">大文件可能需要较长时间</p>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
 
-        <div className="lg:col-span-1 xl:col-span-5 2xl:col-span-4 space-y-6">
-          {/* AI Summary */}
-          <SummaryPanel
-            projectId={currentProject.id}
-            transcriptionExists={!!(currentProject.transcription && currentProject.transcription.content)}
-          />
+interface MediaPlayerPanelProps {
+  projectName: string;
+  duration?: number;
+}
+
+const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({ projectName, duration }) => {
+  return (
+    <div className="flex h-full flex-col rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
+      <div className="flex items-center justify-between pb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+            <PlayCircle className="w-5 h-5 text-indigo-500" />
+            播放器
+          </h2>
+          <p className="text-xs text-gray-400 mt-1">
+            {duration ? `时长约 ${(duration / 60).toFixed(1)} 分钟` : '等待计算时长'}
+          </p>
+        </div>
+        <button className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500">
+          <Volume2 className="w-4 h-4" />
+          静音
+        </button>
+      </div>
+      <div className="flex flex-1 flex-col rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-400">
+        <div className="flex flex-1 flex-col items-center justify-center gap-2">
+          <PlayCircle className="w-10 h-10 text-gray-300" />
+          <p>
+            将在此嵌入 <strong>{projectName}</strong> 的音/视频播放器，并支持与段落的联动播放
+          </p>
+        </div>
+        <div className="rounded-md bg-white py-2 px-3 text-xs text-gray-500">
+          未来可直接点击段落跳转到对应时间，播放器自动保持同步
         </div>
       </div>
     </div>
