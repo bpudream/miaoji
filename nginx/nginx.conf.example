@@ -1,0 +1,16 @@
+# 推荐的 nginx.conf 配置
+
+# 在 http 块的最后添加 include（推荐位置）
+# 这样可以确保我们的配置优先级更高，且不会被其他配置覆盖
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    # 在最后包含我们的配置（推荐）
+    include miaoji.conf;
+}
+

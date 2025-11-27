@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { getSystemStatus, SystemStatus, testConnection, getBackendUrlConfig, testBackendConnection } from '../lib/api';
-import { Copy, Check, Server, Smartphone, Globe, AlertCircle, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { useBackendUrl } from '../hooks/useBackendUrl';
+import { Copy, Check, Server, Smartphone, Globe, AlertCircle, RefreshCw, CheckCircle2, Box, Cpu } from 'lucide-react';
 
 export const SettingsPage = () => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedIP, setSelectedIP] = useState<string | null>(null);
+  const { backendPort } = useBackendUrl(); // 使用 Hook 获取配置的后端端口
 
   // 状态检查
   const [backendHealth, setBackendHealth] = useState<{ status: 'ok' | 'error' | 'checking'; message?: string }>({ status: 'checking' });
@@ -25,10 +27,10 @@ export const SettingsPage = () => {
   }, [systemStatus]);
 
   useEffect(() => {
-    if (selectedIP && systemStatus?.frontendPort) {
+    if (selectedIP) {
       checkNetworkAccessibility(selectedIP);
     }
-  }, [selectedIP, systemStatus]);
+  }, [selectedIP]); // 移除 systemStatus 依赖，因为端口直接从 window 获取
 
   const loadSystemInfo = async () => {
     setLoading(true);
@@ -59,11 +61,11 @@ export const SettingsPage = () => {
   };
 
   const checkNetworkAccessibility = async (ip: string) => {
-    if (!systemStatus?.frontendPort) return;
+    const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
 
     setNetworkHealth({ status: 'checking' });
     try {
-      const result = await testConnection(ip, systemStatus.frontendPort.toString());
+      const result = await testConnection(ip, port);
       setNetworkHealth({
         status: result.success ? 'ok' : 'error',
         message: result.success ? '网络可访问' : '网络可能不可达 (防火墙?)'
@@ -84,8 +86,11 @@ export const SettingsPage = () => {
   };
 
   const getCurrentFrontendUrl = () => {
-    if (!systemStatus || !selectedIP || !systemStatus.frontendPort) return '';
-    return `http://${selectedIP}:${systemStatus.frontendPort}`;
+    if (!selectedIP) return '';
+    const port = window.location.port;
+    const protocol = window.location.protocol;
+    const basePath = import.meta.env.PROD ? '/miaoji' : '';
+    return `${protocol}//${selectedIP}${port ? `:${port}` : ''}${basePath}`;
   };
 
   if (loading && !systemStatus) {
@@ -210,7 +215,7 @@ export const SettingsPage = () => {
             </div>
             <div>
               <h3 className="text-lg font-medium text-gray-900">服务状态</h3>
-              <p className="text-sm text-gray-500">后端服务与环境配置检测</p>
+              <p className="text-sm text-gray-500">关键服务组件运行状态检测</p>
             </div>
           </div>
           <button
@@ -223,10 +228,13 @@ export const SettingsPage = () => {
         </div>
 
         <div className="p-6 grid gap-6 md:grid-cols-2">
-          {/* 后端服务 */}
-          <div className="border border-gray-100 rounded-lg p-4 bg-gray-50/50">
+          {/* 后端服务 (主服务) */}
+          <div className="border border-gray-100 rounded-lg p-4 bg-gray-50/50 col-span-2 md:col-span-2">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-gray-700">后端 API 服务</span>
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-700">后端 API 服务</span>
+              </div>
               <span className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full ${
                 backendHealth.status === 'ok' ? 'bg-green-100 text-green-700' :
                 backendHealth.status === 'checking' ? 'bg-gray-200 text-gray-600' :
@@ -246,7 +254,7 @@ export const SettingsPage = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">端口</span>
-                <span className="font-mono">{systemStatus?.backendPort || '-'}</span>
+                <span className="font-mono">{backendPort}</span>
               </div>
               {backendHealth.message && backendHealth.status !== 'ok' && (
                 <div className="mt-2 text-xs text-red-500 bg-red-50 p-2 rounded">
@@ -256,30 +264,37 @@ export const SettingsPage = () => {
             </div>
           </div>
 
-          {/* 前端环境 */}
+          {/* Whisper 引擎 (占位) */}
           <div className="border border-gray-100 rounded-lg p-4 bg-gray-50/50">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-gray-700">前端服务</span>
-              <span className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                运行中
+              <div className="flex items-center gap-2">
+                <Box className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-700">Faster Whisper</span>
+              </div>
+              <span className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-500">
+                <div className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                未知
               </span>
             </div>
+            <div className="text-xs text-gray-400">
+              语音转写引擎，负责将音频转换为文本。
+            </div>
+          </div>
 
-            <div className="space-y-2 text-sm text-gray-600">
-              <div className="flex justify-between">
-                <span className="text-gray-400">当前访问</span>
-                <span className="font-mono truncate max-w-[200px]" title={window.location.host}>
-                  {window.location.host}
-                </span>
+          {/* Ollama 引擎 (占位) */}
+          <div className="border border-gray-100 rounded-lg p-4 bg-gray-50/50">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-medium text-gray-700">Ollama</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">端口</span>
-                <span className="font-mono">{systemStatus?.frontendPort || '自动'}</span>
-              </div>
-              <div className="mt-2 text-xs text-gray-400">
-                前端配置由 Vite 环境变量管理
-              </div>
+              <span className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-500">
+                <div className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                未知
+              </span>
+            </div>
+            <div className="text-xs text-gray-400">
+              大语言模型服务，负责生成内容摘要。
             </div>
           </div>
         </div>

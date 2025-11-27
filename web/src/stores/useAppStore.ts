@@ -13,7 +13,7 @@ interface AppState {
   clearCurrentProject: () => void;
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
+export const useAppStore = create<AppState>((set) => ({
   projects: [],
   currentProject: null,
   isLoading: false,

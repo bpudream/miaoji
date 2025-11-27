@@ -1,4 +1,3 @@
-import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ProjectListPage } from './pages/ProjectListPage';
@@ -7,8 +6,11 @@ import { ProjectDetailPage } from './pages/ProjectDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const App = () => {
+  // 生产环境使用 /miaoji 作为基础路径
+  const basename = import.meta.env.PROD ? '/miaoji' : '/';
+
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<ProjectListPage />} />

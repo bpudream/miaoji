@@ -187,7 +187,7 @@ export const buildApp = () => {
       return reply.status(400).send({ error: 'IP address is required' });
     }
 
-    const testPort = port || '5173';
+    const testPort = port || '13737';
     const testUrl = `http://${ip}:${testPort}`;
 
     try {

@@ -19,7 +19,21 @@ export const UploadPage = () => {
       navigate(`/projects/${res.id}`);
     } catch (err: any) {
       console.error(err);
-      setError(err.response?.data?.message || err.message || '上传失败，请重试');
+
+      // 增强错误信息显示
+      let errorMessage = '上传失败，请重试';
+      if (err.response) {
+        // 服务器响应错误
+        errorMessage = `服务器错误 (${err.response.status}): ${err.response.data?.message || err.response.statusText}`;
+      } else if (err.request) {
+        // 网络请求发出但无响应
+        errorMessage = '网络连接失败。请检查：1. 手机是否连接了同一WiFi 2. 电脑防火墙是否允许端口 13636 (后端) 和 13737 (前端) 3. 后端服务是否正在运行';
+      } else {
+        // 其他错误
+        errorMessage = err.message || errorMessage;
+      }
+
+      setError(errorMessage);
       setIsUploading(false);
     }
   };

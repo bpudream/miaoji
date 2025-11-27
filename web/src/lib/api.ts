@@ -1,21 +1,21 @@
 import axios from 'axios';
+import { getBackendUrlStatic } from '../hooks/useBackendUrl';
 
-// 从环境变量读取后端地址（Vite 使用 import.meta.env）
-// 开发环境：从 .env 文件读取 VITE_BACKEND_URL
-// 生产环境：构建时注入环境变量
+// 获取后端地址
+// 使用统一的配置逻辑（支持环境变量配置端口、自动适配局域网访问）
 const getBackendUrl = (): string => {
-  // Vite 环境变量必须以 VITE_ 开头
-  const envUrl = (import.meta.env as any).VITE_BACKEND_URL as string | undefined;
-  if (envUrl) {
-    return envUrl.replace(/\/+$/, ''); // 移除末尾斜杠
-  }
-  // 默认值
-  return 'http://localhost:3000';
+  return getBackendUrlStatic();
 };
 
 // 动态获取 API URL
 export const getApiUrl = (): string => {
-  return `${getBackendUrl()}/api`;
+  const backendUrl = getBackendUrl();
+  // 如果 backendUrl 为空（生产环境通过 Nginx 代理），使用相对路径
+  if (!backendUrl) {
+    // 生产环境部署在 /miaoji 路径下
+    return import.meta.env.PROD ? '/miaoji/api' : '/api';
+  }
+  return `${backendUrl}/api`;
 };
 
 // 获取当前后端地址（只读，从环境变量读取）

@@ -8,9 +8,19 @@ export const Layout = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const isDetailPage = location.pathname.startsWith('/projects/');
 
-  // Auto-collapse on project detail page
+  // Auto-collapse on project detail page OR small screens
   useEffect(() => {
-    setIsCollapsed(isDetailPage);
+    const shouldCollapse = isDetailPage || window.innerWidth < 768; // 768px is tailwind 'md' breakpoint
+    setIsCollapsed(shouldCollapse);
+
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setIsCollapsed(true);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, [isDetailPage]);
 
   const isActive = (path: string) => {
