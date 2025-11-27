@@ -83,6 +83,27 @@ const initDb = () => {
       FOREIGN KEY (media_file_id) REFERENCES media_files(id)
     );
   `);
+
+  // 配置表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // 初始化默认配置（仅后端端口，前端端口由前端自己管理）
+  if (!isTest) {
+    try {
+      const defaultBackendPort = db.prepare('SELECT value FROM settings WHERE key = ?').get('backend_port');
+      if (!defaultBackendPort) {
+        db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('backend_port', '3000');
+      }
+    } catch (e: any) {
+      // 忽略错误（表可能已存在）
+    }
+  }
 };
 
 initDb();

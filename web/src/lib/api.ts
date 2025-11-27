@@ -1,10 +1,36 @@
 import axios from 'axios';
 
-export const API_URL = 'http://localhost:3000/api';
+// 从环境变量读取后端地址（Vite 使用 import.meta.env）
+// 开发环境：从 .env 文件读取 VITE_BACKEND_URL
+// 生产环境：构建时注入环境变量
+const getBackendUrl = (): string => {
+  // Vite 环境变量必须以 VITE_ 开头
+  const envUrl = (import.meta.env as any).VITE_BACKEND_URL as string | undefined;
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, ''); // 移除末尾斜杠
+  }
+  // 默认值
+  return 'http://localhost:3000';
+};
+
+// 动态获取 API URL
+export const getApiUrl = (): string => {
+  return `${getBackendUrl()}/api`;
+};
+
+// 获取当前后端地址（只读，从环境变量读取）
+export const getBackendUrlConfig = (): string => {
+  return getBackendUrl();
+};
+
+export const API_URL = getApiUrl();
 
 export const api = axios.create({
   baseURL: API_URL,
 });
+
+// 注意：后端地址现在从环境变量读取，不再支持动态修改
+// 如果需要修改后端地址，请更新 .env 文件中的 VITE_BACKEND_URL 并重启前端开发服务器
 
 export interface Project {
   id: number;
@@ -126,4 +152,90 @@ export const exportTranscription = async (id: number, format: ExportFormat) => {
 
 export const updateTranscription = async (id: number, segments: any[]): Promise<void> => {
   await api.put(`/projects/${id}/transcription`, { segments });
+};
+
+export interface NetworkInterface {
+  name: string;
+  ip: string;
+  type: 'wifi' | 'ethernet' | 'other' | 'virtual' | 'bluetooth';
+  priority: number;
+}
+
+export interface SystemStatus {
+  interfaces: NetworkInterface[];
+  defaultIP: string;
+  frontendPort: number | null; // 可能为 null，如果前端没有提供端口信息
+  backendPort: number;
+  frontendUrl: string | null; // 可能为 null，如果前端没有提供端口信息
+  backendUrl: string;
+  timestamp: string;
+}
+
+export interface ConnectionTestResult {
+  success: boolean;
+  status?: number;
+  url: string;
+  message: string;
+  error?: string;
+}
+
+export const getSystemStatus = async (): Promise<SystemStatus> => {
+  const frontendPort = getFrontendPort();
+  const response = await api.get<SystemStatus>('/system/status', {
+    headers: frontendPort ? { 'x-frontend-port': String(frontendPort) } : {},
+  });
+  return response.data;
+};
+
+export const testConnection = async (ip: string, port?: string): Promise<ConnectionTestResult> => {
+  const response = await api.get<ConnectionTestResult>('/system/test-connection', {
+    params: { ip, port },
+  });
+  return response.data;
+};
+
+export interface PortInfo {
+  backendPort: number;
+  frontendPort: number | null; // 可能为 null，如果无法获取
+}
+
+// 获取当前前端端口
+const getFrontendPort = (): number | null => {
+  const port = window.location.port;
+  if (port) {
+    return parseInt(port, 10);
+  }
+  // 如果是默认端口（http 80, https 443），port 为空
+  const protocol = window.location.protocol;
+  if (protocol === 'https:') {
+    return 443;
+  }
+  if (protocol === 'http:') {
+    return 80;
+  }
+  return null;
+};
+
+export const getPortInfo = async (): Promise<PortInfo> => {
+  const frontendPort = getFrontendPort();
+  const response = await api.get<PortInfo>('/system/ports', {
+    headers: frontendPort ? { 'x-frontend-port': String(frontendPort) } : {},
+  });
+  return response.data;
+};
+
+// 测试当前配置的后端连接
+export const testBackendConnection = async (): Promise<{ success: boolean; message: string }> => {
+  try {
+    const response = await api.get('/health', { timeout: 3000 });
+    return {
+      success: response.status === 200,
+      message: '连接成功',
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error.code === 'ECONNABORTED' ? '连接超时' : '连接失败',
+    };
+  }
 };

@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, PlayCircle } from 'lucide-react';
 import { clsx } from 'clsx';
-import { API_URL } from '../lib/api';
+import { getApiUrl } from '../lib/api';
 
 export interface MediaPlayerRef {
   seekTo: (time: number) => void;
@@ -56,7 +56,7 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
     // 媒体 URL - 根据模式选择原始文件或提取的音频
     // 音频模式：如果有提取的音频文件，使用提取的音频；否则使用原始文件
     // 视频模式：使用原始文件
-    const baseMediaUrl = `${API_URL}/projects/${projectId}/media`;
+    const baseMediaUrl = `${getApiUrl()}/projects/${projectId}/media`;
     const mediaUrl = showVideo
       ? baseMediaUrl
       : (hasAudioPath

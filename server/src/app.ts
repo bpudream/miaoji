@@ -1,12 +1,17 @@
+import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import db from './db';
 import queue from './queue';
 import { ollamaService, SummaryMode } from './services/ollama';
+
+// 从环境变量读取配置
+const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
 
 export const buildApp = () => {
   const fastify = Fastify({
@@ -57,6 +62,200 @@ export const buildApp = () => {
 
   fastify.get('/api/health', async (request, reply) => {
     return { status: 'ok', timestamp: new Date().toISOString() };
+  });
+
+  // 判断网络接口类型
+  const getInterfaceType = (interfaceName: string): { type: 'wifi' | 'ethernet' | 'other' | 'virtual' | 'bluetooth'; priority: number } => {
+    const name = interfaceName.toLowerCase();
+
+    // 排除虚拟网卡和蓝牙
+    if (name.includes('bluetooth') || name.includes('蓝牙')) {
+      return { type: 'bluetooth', priority: 0 };
+    }
+    if (name.includes('virtual') || name.includes('vmware') || name.includes('virtualbox') ||
+        name.includes('hyper-v') || name.includes('wsl') || name.includes('vethernet') ||
+        name.includes('loopback') || name.includes('teredo') || name.includes('isatap') ||
+        name.includes('vpn') || name.includes('tap') || name.includes('docker')) {
+      return { type: 'virtual', priority: 0 };
+    }
+
+    // WiFi 接口（优先级最高）
+    if (name.includes('wi-fi') || name.includes('wlan') || name.includes('wireless') ||
+        name.includes('wifi') || name.includes('802.11')) {
+      return { type: 'wifi', priority: 3 };
+    }
+
+    // 以太网接口（次优先级）
+    if (name.includes('ethernet') || name.includes('以太网') || name.includes('本地连接') ||
+        name.includes('lan') || name.includes('eth')) {
+      return { type: 'ethernet', priority: 2 };
+    }
+
+    // 其他接口
+    return { type: 'other', priority: 1 };
+  };
+
+  // 获取配置的辅助函数
+  const getSetting = (key: string, defaultValue: string): string => {
+    try {
+      const result = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+      return result?.value || defaultValue;
+    } catch (e) {
+      return defaultValue;
+    }
+  };
+
+  // 获取系统状态信息（IP地址、端口等）
+  fastify.get('/api/system/status', async (request, reply) => {
+    const networkInterfaces = os.networkInterfaces();
+    const interfaceList: Array<{
+      name: string;
+      ip: string;
+      type: 'wifi' | 'ethernet' | 'other' | 'virtual' | 'bluetooth';
+      priority: number;
+    }> = [];
+    const backendPort = BACKEND_PORT; // 从环境变量读取，不可配置
+
+    // 前端端口从前端请求头获取（前端自己管理）
+    // 如果前端没有提供，则返回 null
+    const frontendPortHeader = request.headers['x-frontend-port'];
+    const frontendPort = frontendPortHeader ? parseInt(String(frontendPortHeader), 10) : null;
+
+    // 收集所有非内部 IPv4 地址及其接口信息
+    for (const interfaceName in networkInterfaces) {
+      const interfaces = networkInterfaces[interfaceName];
+      if (interfaces) {
+        const interfaceType = getInterfaceType(interfaceName);
+
+        // 排除虚拟网卡和蓝牙
+        if (interfaceType.priority === 0) {
+          continue;
+        }
+
+        for (const iface of interfaces) {
+          // 只获取 IPv4 地址，排除内部地址（127.0.0.1）
+          if (iface.family === 'IPv4' && !iface.internal) {
+            interfaceList.push({
+              name: interfaceName,
+              ip: iface.address,
+              type: interfaceType.type,
+              priority: interfaceType.priority,
+            });
+          }
+        }
+      }
+    }
+
+    // 按优先级排序：WiFi > 以太网 > 其他
+    interfaceList.sort((a, b) => b.priority - a.priority);
+
+    // 如果没有找到外部 IP，添加 localhost
+    if (interfaceList.length === 0) {
+      interfaceList.push({
+        name: 'localhost',
+        ip: '127.0.0.1',
+        type: 'other',
+        priority: 0,
+      });
+    }
+
+    // 获取请求的 host（可能包含端口）
+    const requestHost = request.headers.host || `localhost:${backendPort}`;
+    const requestProtocol = request.headers['x-forwarded-proto'] || 'http';
+
+    // 使用优先级最高的IP作为默认
+    const defaultIP = interfaceList[0]?.ip || '127.0.0.1';
+    const frontendUrl = frontendPort ? `${requestProtocol}://${defaultIP}:${frontendPort}` : null;
+    const backendUrl = `${requestProtocol}://${requestHost}`;
+
+    return {
+      interfaces: interfaceList,
+      defaultIP,
+      frontendPort, // 可能为 null，如果前端没有提供
+      backendPort,
+      frontendUrl, // 可能为 null，如果前端没有提供端口
+      backendUrl,
+      timestamp: new Date().toISOString(),
+    };
+  });
+
+  // 测试前端连接
+  fastify.get('/api/system/test-connection', async (request, reply) => {
+    const { ip, port } = request.query as { ip?: string; port?: string };
+
+    if (!ip) {
+      return reply.status(400).send({ error: 'IP address is required' });
+    }
+
+    const testPort = port || '5173';
+    const testUrl = `http://${ip}:${testPort}`;
+
+    try {
+      // 使用 http 模块测试连接（超时 3 秒）
+      const http = await import('node:http');
+
+      const result = await new Promise<{ success: boolean; status?: number; message: string }>((resolve) => {
+        const timeoutId = setTimeout(() => {
+          resolve({
+            success: false,
+            message: '连接超时',
+          });
+        }, 3000);
+
+        const req = http.get(testUrl, { timeout: 3000 }, (res) => {
+          clearTimeout(timeoutId);
+          const statusCode = res.statusCode || 0;
+          resolve({
+            success: statusCode === 200 || statusCode === 304,
+            status: statusCode,
+            message: statusCode === 200 || statusCode === 304 ? '连接成功' : '连接失败',
+          });
+        });
+
+        req.on('error', (error) => {
+          clearTimeout(timeoutId);
+          resolve({
+            success: false,
+            message: '连接失败',
+          });
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          clearTimeout(timeoutId);
+          resolve({
+            success: false,
+            message: '连接超时',
+          });
+        });
+      });
+
+      return {
+        success: result.success,
+        status: result.status,
+        url: testUrl,
+        message: result.message,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        url: testUrl,
+        message: '连接失败',
+        error: error.message,
+      };
+    }
+  });
+
+  // 获取端口信息（只读，仅用于显示）
+  fastify.get('/api/system/ports', async (request, reply) => {
+    // 前端端口从前端请求头获取
+    const frontendPortHeader = request.headers['x-frontend-port'];
+    const frontendPort = frontendPortHeader ? parseInt(String(frontendPortHeader), 10) : null;
+
+    return {
+      backendPort: BACKEND_PORT, // 从环境变量读取，只读
+      frontendPort, // 从前端请求头获取，只读
+    };
   });
 
   // 文件上传路由
@@ -640,9 +839,9 @@ export const buildApp = () => {
 const start = async () => {
   const fastify = buildApp();
   try {
-    const port = 3000;
-    await fastify.listen({ port, host: '0.0.0.0' });
-    console.log(`Server listening at http://localhost:${port}`);
+    await fastify.listen({ port: BACKEND_PORT, host: '0.0.0.0' });
+    console.log(`Server listening at http://localhost:${BACKEND_PORT}`);
+    console.log(`Backend port is configured via BACKEND_PORT environment variable (current: ${BACKEND_PORT})`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
