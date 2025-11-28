@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { uploadFile } from '../lib/api';
 
 interface Props {
-  onUploadSuccess: (id: number) => void;
+  onUploadSuccess: (id: string) => void;
 }
 
 export const Upload: React.FC<Props> = ({ onUploadSuccess }) => {
@@ -18,7 +18,11 @@ export const Upload: React.FC<Props> = ({ onUploadSuccess }) => {
 
     try {
       const result = await uploadFile(file);
-      onUploadSuccess(result.id);
+      if (result.id) {
+        onUploadSuccess(result.id);
+      } else {
+        setError('Upload failed: No ID returned');
+      }
     } catch (err: any) {
       setError(err.message || 'Upload failed');
       console.error(err);

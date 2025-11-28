@@ -4,8 +4,7 @@ import {
   addStoragePath,
   updateStoragePath,
   deleteStoragePath,
-  StoragePath,
-  StorageInfo
+  StoragePath
 } from '../lib/api';
 import {
   Plus,

@@ -45,3 +45,4 @@ server/data/*.db-wal
 
 # Web specific
 web/.vite/
+web/tsconfig.app.tsbuildinfo
