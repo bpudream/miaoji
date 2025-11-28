@@ -41,6 +41,9 @@ export interface Project {
   duration?: number; // 音频时长 (秒)
   mime_type?: string; // MIME类型，用于判断音频/视频
   audio_path?: string; // 提取的音频文件路径
+  filepath?: string; // 文件存储路径
+  size?: number; // 文件大小（字节）
+  summary_count?: number; // 总结数量
   transcription?: {
     content: any;
     format: string;
@@ -238,4 +241,97 @@ export const testBackendConnection = async (): Promise<{ success: boolean; messa
       message: error.code === 'ECONNABORTED' ? '连接超时' : '连接失败',
     };
   }
+};
+
+// ========== 存储路径管理 API ==========
+
+export interface StorageInfo {
+  total: number;      // 总容量（字节）
+  used: number;       // 已用空间（字节）
+  free: number;       // 可用空间（字节）
+  usagePercent: number; // 使用百分比
+}
+
+export interface StoragePath {
+  id: number;
+  name: string;
+  path: string;
+  enabled: boolean;
+  priority: number;
+  max_size_gb: number | null;
+  created_at: string;
+  updated_at: string;
+  info?: StorageInfo;
+}
+
+export interface StoragePathsResponse {
+  status: string;
+  paths: StoragePath[];
+}
+
+export interface StoragePathResponse {
+  status: string;
+  path: StoragePath;
+}
+
+export interface MigrateFilesRequest {
+  file_ids: number[];
+  target_path_id: number;
+  delete_source?: boolean;
+}
+
+export interface MigrateFilesResponse {
+  status: string;
+  total: number;
+  success: number;
+  failed: number;
+  results: Array<{ fileId: number; success: boolean; message: string }>;
+}
+
+// 获取所有存储路径
+export const getStoragePaths = async (): Promise<StoragePath[]> => {
+  const response = await api.get<StoragePathsResponse>('/storage/paths');
+  return response.data.paths;
+};
+
+// 添加存储路径
+export const addStoragePath = async (data: {
+  name: string;
+  path: string;
+  priority?: number;
+  max_size_gb?: number | null;
+}): Promise<StoragePath> => {
+  const response = await api.post<StoragePathResponse>('/storage/paths', data);
+  return response.data.path;
+};
+
+// 更新存储路径
+export const updateStoragePath = async (
+  id: number,
+  data: {
+    name?: string;
+    enabled?: boolean;
+    priority?: number;
+    max_size_gb?: number | null;
+  }
+): Promise<StoragePath> => {
+  const response = await api.put<StoragePathResponse>(`/storage/paths/${id}`, data);
+  return response.data.path;
+};
+
+// 删除存储路径
+export const deleteStoragePath = async (id: number): Promise<void> => {
+  await api.delete(`/storage/paths/${id}`);
+};
+
+// 获取存储路径信息
+export const getStoragePathInfo = async (id: number): Promise<StoragePath> => {
+  const response = await api.get<StoragePathResponse>(`/storage/paths/${id}/info`);
+  return response.data.path;
+};
+
+// 迁移文件
+export const migrateFiles = async (data: MigrateFilesRequest): Promise<MigrateFilesResponse> => {
+  const response = await api.post<MigrateFilesResponse>('/storage/migrate', data);
+  return response.data;
 };

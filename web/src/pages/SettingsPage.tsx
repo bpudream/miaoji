@@ -3,6 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { getSystemStatus, SystemStatus, testConnection, getBackendUrlConfig, testBackendConnection } from '../lib/api';
 import { useBackendUrl } from '../hooks/useBackendUrl';
 import { Copy, Check, Server, Smartphone, Globe, AlertCircle, RefreshCw, CheckCircle2, Box, Cpu } from 'lucide-react';
+import { StoragePathsManager } from '../components/StoragePathsManager';
 
 export const SettingsPage = () => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
@@ -297,6 +298,11 @@ export const SettingsPage = () => {
               大语言模型服务，负责生成内容摘要。
             </div>
           </div>
+        </div>
+
+        {/* 存储路径管理 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <StoragePathsManager />
         </div>
       </div>
     </div>

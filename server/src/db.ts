@@ -93,6 +93,28 @@ const initDb = () => {
     );
   `);
 
+  // 存储路径配置表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS storage_paths (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL UNIQUE,
+      enabled BOOLEAN DEFAULT 1,
+      priority INTEGER DEFAULT 0,
+      max_size_gb INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // 为 storage_paths 表创建索引
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_storage_paths_enabled ON storage_paths(enabled)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_storage_paths_priority ON storage_paths(priority DESC)');
+  } catch (e: any) {
+    // 忽略索引已存在的错误
+  }
+
   // 初始化默认配置（仅后端端口，前端端口由前端自己管理）
   if (!isTest) {
     try {
@@ -100,8 +122,20 @@ const initDb = () => {
       if (!defaultBackendPort) {
         db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('backend_port', '3000');
       }
+
+      // 初始化默认存储路径（如果表为空）
+      const defaultPath = db.prepare('SELECT COUNT(*) as count FROM storage_paths').get() as { count: number };
+      if (defaultPath.count === 0) {
+        const defaultUploadDir = path.join(__dirname, '../uploads');
+        db.prepare(`
+          INSERT INTO storage_paths (name, path, enabled, priority)
+          VALUES (?, ?, 1, 0)
+        `).run('默认路径', defaultUploadDir);
+        console.log(`[DB] Initialized default storage path: ${defaultUploadDir}`);
+      }
     } catch (e: any) {
       // 忽略错误（表可能已存在）
+      console.error('[DB] Error initializing default storage path:', e.message);
     }
   }
 };

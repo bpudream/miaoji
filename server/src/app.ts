@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import db from './db';
 import queue from './queue';
 import { ollamaService, SummaryMode } from './services/ollama';
+import { StorageService } from './services/storage';
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
@@ -49,10 +50,10 @@ export const buildApp = () => {
     });
   });
 
-  // 确保上传目录存在
-  const UPLOAD_DIR = path.join(__dirname, '../uploads');
-  if (!fs.existsSync(UPLOAD_DIR)) {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  // 确保默认上传目录存在（向后兼容）
+  const DEFAULT_UPLOAD_DIR = path.join(__dirname, '../uploads');
+  if (!fs.existsSync(DEFAULT_UPLOAD_DIR)) {
+    fs.mkdirSync(DEFAULT_UPLOAD_DIR, { recursive: true });
   }
 
   // 基础路由
@@ -281,8 +282,16 @@ export const buildApp = () => {
       });
     }
 
+    // 选择最佳存储路径
+    const storagePath = StorageService.getBestStoragePath();
+
+    // 确保目录存在
+    if (!fs.existsSync(storagePath)) {
+      fs.mkdirSync(storagePath, { recursive: true });
+    }
+
     const filename = `${Date.now()}-${data.filename}`;
-    const filepath = path.join(UPLOAD_DIR, filename);
+    const filepath = path.join(storagePath, filename);
 
     await pipeline(data.file, fs.createWriteStream(filepath));
 
@@ -453,6 +462,20 @@ export const buildApp = () => {
       }
     }
 
+    // 获取文件大小
+    let fileSize = 0;
+    if (file.filepath && fs.existsSync(file.filepath)) {
+      try {
+        const stats = fs.statSync(file.filepath);
+        fileSize = stats.size;
+      } catch (e) {
+        console.warn(`[API] Failed to get file size for ${file.filepath}:`, e);
+      }
+    }
+
+    // 获取总结数量
+    const summaryCount = db.prepare('SELECT COUNT(*) as count FROM summaries WHERE media_file_id = ?').get(id) as { count: number } | undefined;
+
     return {
       id: file.id,
       filename: file.filename,
@@ -462,6 +485,9 @@ export const buildApp = () => {
       duration: file.duration, // ✅ 添加 duration 字段
       mime_type: file.mime_type, // ✅ 添加 mime_type 字段用于判断音频/视频
       audio_path: file.audio_path, // ✅ 添加 audio_path 字段，用于播放提取的音频
+      filepath: file.filepath, // ✅ 添加 filepath 字段
+      size: fileSize, // ✅ 添加文件大小
+      summary_count: summaryCount?.count || 0, // ✅ 添加总结数量
       transcription
     };
   });
@@ -830,6 +856,130 @@ export const buildApp = () => {
     queue.add(file.id, file.filepath);
 
     return { status: 'success', message: 'Task queued for retry' };
+  });
+
+  // ========== 存储路径管理 API ==========
+
+  // 获取所有存储路径（含磁盘信息）
+  fastify.get('/api/storage/paths', async (request, reply) => {
+    try {
+      const paths = await StorageService.getAllPathsWithInfo();
+      return { status: 'success', paths };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(500).send({ error: 'Failed to get storage paths', details: error.message });
+    }
+  });
+
+  // 添加存储路径
+  fastify.post('/api/storage/paths', async (request, reply) => {
+    try {
+      const { name, path: dirPath, priority = 0, max_size_gb = null } = request.body as {
+        name: string;
+        path: string;
+        priority?: number;
+        max_size_gb?: number | null;
+      };
+
+      if (!name || !dirPath) {
+        return reply.code(400).send({ error: 'name and path are required' });
+      }
+
+      const id = StorageService.addPath(name, dirPath, priority, max_size_gb);
+      const pathInfo = StorageService.getPathInfo(id);
+
+      return { status: 'success', path: pathInfo };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(400).send({ error: error.message || 'Failed to add storage path' });
+    }
+  });
+
+  // 更新存储路径
+  fastify.put('/api/storage/paths/:id', async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const updates = request.body as {
+        name?: string;
+        enabled?: boolean;
+        priority?: number;
+        max_size_gb?: number | null;
+      };
+
+      StorageService.updatePath(Number(id), updates);
+      const pathInfo = StorageService.getPathInfo(Number(id));
+
+      if (!pathInfo) {
+        return reply.code(404).send({ error: 'Storage path not found' });
+      }
+
+      return { status: 'success', path: pathInfo };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(400).send({ error: error.message || 'Failed to update storage path' });
+    }
+  });
+
+  // 删除存储路径
+  fastify.delete('/api/storage/paths/:id', async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      StorageService.deletePath(Number(id));
+      return { status: 'success', message: 'Storage path deleted' };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(400).send({ error: error.message || 'Failed to delete storage path' });
+    }
+  });
+
+  // 获取指定路径的磁盘信息
+  fastify.get('/api/storage/paths/:id/info', async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const pathInfo = StorageService.getPathInfo(Number(id));
+
+      if (!pathInfo) {
+        return reply.code(404).send({ error: 'Storage path not found' });
+      }
+
+      return { status: 'success', path: pathInfo };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(500).send({ error: 'Failed to get storage path info', details: error.message });
+    }
+  });
+
+  // 迁移文件
+  fastify.post('/api/storage/migrate', async (request, reply) => {
+    try {
+      const { file_ids, target_path_id, delete_source = false } = request.body as {
+        file_ids: number[];
+        target_path_id: number;
+        delete_source?: boolean;
+      };
+
+      if (!file_ids || !Array.isArray(file_ids) || file_ids.length === 0) {
+        return reply.code(400).send({ error: 'file_ids is required and must be a non-empty array' });
+      }
+
+      if (!target_path_id) {
+        return reply.code(400).send({ error: 'target_path_id is required' });
+      }
+
+      // 执行批量迁移
+      const result = await StorageService.migrateFiles(file_ids, target_path_id, {
+        deleteSource: delete_source
+      });
+
+      return {
+        status: 'success',
+        ...result
+      };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(500).send({ error: 'Failed to migrate files', details: error.message });
+    }
   });
 
   return fastify;
