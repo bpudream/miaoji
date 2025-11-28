@@ -105,31 +105,31 @@ export const SettingsPage = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto space-y-6 md:space-y-8 p-4 md:p-0 pb-20 md:pb-0">
       <div>
-        <h2 className="text-2xl font-bold text-gray-800">系统设置</h2>
-        <p className="text-gray-500 mt-1">管理系统连接与服务状态</p>
+        <h2 className="text-xl md:text-2xl font-bold text-gray-800">系统设置</h2>
+        <p className="text-xs md:text-base text-gray-500 mt-1">管理系统连接与服务状态</p>
       </div>
 
       {/* 1. 移动端访问/分享 (用户核心需求) */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-6 border-b border-gray-100 flex items-center gap-3">
+        <div className="p-4 md:p-6 border-b border-gray-100 flex items-center gap-3">
           <div className="p-2 bg-blue-50 rounded-lg">
-            <Smartphone className="w-6 h-6 text-blue-600" />
+            <Smartphone className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
           </div>
           <div>
-            <h3 className="text-lg font-medium text-gray-900">移动端访问</h3>
-            <p className="text-sm text-gray-500">在局域网内的其他设备上访问此系统</p>
+            <h3 className="text-base md:text-lg font-medium text-gray-900">移动端访问</h3>
+            <p className="text-xs md:text-sm text-gray-500">在局域网内的其他设备上访问此系统</p>
           </div>
         </div>
 
-        <div className="p-6">
-          <div className="flex flex-col md:flex-row gap-8 items-start">
+        <div className="p-4 md:p-6">
+          <div className="flex flex-col md:flex-row gap-6 md:gap-8 items-start">
             {/* 左侧：二维码 */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex-shrink-0 mx-auto md:mx-0">
+            <div className="bg-white p-3 md:p-4 rounded-xl border border-gray-200 shadow-sm flex-shrink-0 mx-auto md:mx-0">
               <QRCodeSVG
                 value={getCurrentFrontendUrl()}
-                size={180}
+                size={160}
                 level="M"
                 includeMargin={true}
               />
@@ -208,14 +208,14 @@ export const SettingsPage = () => {
 
       {/* 2. 服务状态 (系统健康) */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+        <div className="p-4 md:p-6 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-indigo-50 rounded-lg">
-              <Server className="w-6 h-6 text-indigo-600" />
+              <Server className="w-5 h-5 md:w-6 md:h-6 text-indigo-600" />
             </div>
             <div>
-              <h3 className="text-lg font-medium text-gray-900">服务状态</h3>
-              <p className="text-sm text-gray-500">关键服务组件运行状态检测</p>
+              <h3 className="text-base md:text-lg font-medium text-gray-900">服务状态</h3>
+              <p className="text-xs md:text-sm text-gray-500">关键服务组件运行状态检测</p>
             </div>
           </div>
           <button
@@ -223,11 +223,11 @@ export const SettingsPage = () => {
             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-full transition-colors"
             title="刷新状态"
           >
-            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 md:w-5 md:h-5 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
-        <div className="p-6 grid gap-6 md:grid-cols-2">
+        <div className="p-4 md:p-6 grid gap-4 md:gap-6 md:grid-cols-2">
           {/* 后端服务 (主服务) */}
           <div className="border border-gray-100 rounded-lg p-4 bg-gray-50/50 col-span-2 md:col-span-2">
             <div className="flex items-center justify-between mb-3">

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import clsx from 'clsx';
 import { getTranscription, TranscriptionResponse, updateTranscription, exportTranscription, ExportFormat, Project } from '../lib/api';
-import { FileText, Copy, Loader2, Download, AlertCircle } from 'lucide-react';
+import { FileText, Copy, Loader2, Download, AlertCircle, Anchor } from 'lucide-react';
 
 interface Props {
   fileId: number;
@@ -39,6 +39,7 @@ export const TranscriptionResult: React.FC<Props> = ({
   const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [autoScroll, setAutoScroll] = useState(true);
 
   // History for undo/redo
   const [history, setHistory] = useState<Segment[][]>([]);
@@ -211,7 +212,7 @@ export const TranscriptionResult: React.FC<Props> = ({
 
   // 自动滚动到当前播放段落
   useEffect(() => {
-    if (currentPlayTime > 0) {
+    if (currentPlayTime > 0 && autoScroll) {
       const currentIndex = segments.findIndex(
         seg => currentPlayTime >= seg.start && currentPlayTime < seg.end
       );
@@ -222,7 +223,7 @@ export const TranscriptionResult: React.FC<Props> = ({
         });
       }
     }
-  }, [currentPlayTime, segments]);
+  }, [currentPlayTime, segments, autoScroll]);
 
   const enableEditing = (focusIndex?: number) => {
     const newEditingState = true;
@@ -307,7 +308,7 @@ export const TranscriptionResult: React.FC<Props> = ({
   return (
     <div className={clsx("flex h-full flex-col p-5 pt-0", className)}>
       {/* Toolbar: Search + Filter */}
-      <div className="flex-shrink-0 flex items-center gap-3 pb-3">
+      <div className="flex-shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 pb-3">
         <div className="relative flex-1">
           <input
             value={searchTerm}
@@ -317,14 +318,30 @@ export const TranscriptionResult: React.FC<Props> = ({
           />
           <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">⌕</span>
         </div>
-        <select
-          value={filterMode}
-          onChange={(e) => setFilterMode(e.target.value as FilterMode)}
-          className="h-9 rounded-full border border-gray-200 bg-white px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-        >
-          <option value="all">全部段落</option>
-          <option value="edited">仅已编辑</option>
-        </select>
+        <div className="flex gap-2">
+           <button
+             onClick={() => setAutoScroll(!autoScroll)}
+             className={clsx(
+               "h-9 px-3 rounded-full border text-sm flex items-center gap-1 transition-colors whitespace-nowrap",
+               autoScroll
+                 ? "bg-blue-50 text-blue-600 border-blue-200"
+                 : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+             )}
+             title={autoScroll ? "已开启自动跟随" : "点击开启自动跟随"}
+           >
+             <Anchor className={clsx("w-3.5 h-3.5", autoScroll && "fill-current")} />
+             <span className="hidden sm:inline">{autoScroll ? "跟随中" : "不跟随"}</span>
+             <span className="sm:hidden">{autoScroll ? "跟随" : "静止"}</span>
+           </button>
+           <select
+             value={filterMode}
+             onChange={(e) => setFilterMode(e.target.value as FilterMode)}
+             className="h-9 rounded-full border border-gray-200 bg-white px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200 flex-1 sm:flex-none sm:w-auto"
+           >
+             <option value="all">全部</option>
+             <option value="edited">已编辑</option>
+           </select>
+        </div>
       </div>
 
 
