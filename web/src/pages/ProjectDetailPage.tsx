@@ -1,11 +1,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
-import { Clock, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Clock, Loader2, ChevronDown, ChevronUp, Edit2, Save, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionPanel } from '../components/TranscriptionResult';
 import { MediaPlayerPanel, MediaPlayerRef } from '../components/MediaPlayer';
+import { updateProjectName } from '../lib/api';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -133,6 +134,9 @@ export const ProjectDetailPage = () => {
   const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
   const playerRef = useRef<MediaPlayerRef>(null);
   const [currentPlayTime, setCurrentPlayTime] = useState(0);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedDisplayName, setEditedDisplayName] = useState('');
+  const [savingName, setSavingName] = useState(false);
 
   // 早期返回必须在所有 hooks 之后
   if (isLoading && !currentProject) return <div className="p-8 text-center">加载中...</div>;
@@ -183,13 +187,102 @@ export const ProjectDetailPage = () => {
     setIsSummaryCollapsed((prev) => !prev);
   };
 
+  const handleStartEditName = () => {
+    if (currentProject) {
+      setEditedDisplayName(currentProject.display_name || '');
+      setIsEditingName(true);
+    }
+  };
+
+  const handleCancelEditName = () => {
+    setIsEditingName(false);
+    setEditedDisplayName('');
+  };
+
+  const handleSaveName = async () => {
+    if (!currentProject || !id) return;
+
+    setSavingName(true);
+    try {
+      const projectId = Number(id);
+      const result = await updateProjectName(projectId, editedDisplayName.trim() || null);
+
+      // 更新 store 中的项目数据
+      useAppStore.setState((state) => {
+        if (state.currentProject) {
+          return {
+            currentProject: {
+              ...state.currentProject,
+              display_name: result.display_name
+            }
+          };
+        }
+        return state;
+      });
+
+      setIsEditingName(false);
+    } catch (err: any) {
+      console.error('更新项目名称失败:', err);
+      alert(err.response?.data?.error || '更新项目名称失败');
+    } finally {
+      setSavingName(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="detail-title-box flex-shrink-0 mb-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">{currentProject.display_name || currentProject.original_name}</h1>
+            <div className="flex-1">
+              {isEditingName ? (
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={editedDisplayName}
+                    onChange={(e) => setEditedDisplayName(e.target.value)}
+                    placeholder={currentProject.original_name}
+                    className="flex-1 px-3 py-2 text-2xl font-bold text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSaveName();
+                      } else if (e.key === 'Escape') {
+                        handleCancelEditName();
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveName}
+                    disabled={savingName}
+                    className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50"
+                    title="保存"
+                  >
+                    <Save className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={handleCancelEditName}
+                    disabled={savingName}
+                    className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                    title="取消"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 mb-2">
+                  <h1 className="text-2xl font-bold text-gray-900 flex-1">
+                    {currentProject.display_name || currentProject.original_name}
+                  </h1>
+                  <button
+                    onClick={handleStartEditName}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    title="编辑项目名称"
+                  >
+                    <Edit2 className="w-5 h-5" />
+                  </button>
+                </div>
+              )}
               <div className="flex items-center gap-4 text-sm text-gray-500">
                 <span className="flex items-center gap-1">
                   <Clock className="w-4 h-4" />
@@ -203,7 +296,6 @@ export const ProjectDetailPage = () => {
                 </span>
               </div>
             </div>
-            <div />
           </div>
         </div>
       </div>
