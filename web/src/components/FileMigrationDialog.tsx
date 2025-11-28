@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 interface FileMigrationDialogProps {
-  fileIds: number[];
+  fileIds: string[];
   onClose: () => void;
   onSuccess?: () => void;
 }
@@ -41,7 +41,7 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
   const [progress, setProgress] = useState<{
     current: number;
     total: number;
-    results: Array<{ fileId: number; success: boolean; message: string }>;
+    results: Array<{ fileId: string; success: boolean; message: string }>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [migrationInfo, setMigrationInfo] = useState<MigrationInfo | null>(null);
@@ -69,7 +69,7 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
     }
   };
 
-  const loadMigrationInfo = async (fileId: number) => {
+  const loadMigrationInfo = async (fileId: string) => {
     try {
       const apiUrl = import.meta.env.VITE_API_URL || (window.location.origin + '/api');
       const response = await fetch(`${apiUrl}/projects/${fileId}/migration-info`);

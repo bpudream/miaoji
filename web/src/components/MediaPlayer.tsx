@@ -11,7 +11,7 @@ export interface MediaPlayerRef {
 }
 
 interface MediaPlayerProps {
-  projectId: number;
+  projectId: string;
   isVideo: boolean;
   hasAudioPath: boolean; // 是否有提取的音频文件
   playerMode: 'audio' | 'video';
@@ -461,7 +461,7 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
 MediaPlayer.displayName = 'MediaPlayer';
 
 export interface MediaPlayerPanelProps {
-  projectId: number;
+  projectId: string;
   projectName: string;
   duration?: number;
   isVideo: boolean;

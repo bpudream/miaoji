@@ -56,7 +56,7 @@ export const ProjectDetailPage = () => {
   useEffect(() => {
     if (!id) return;
 
-    const projectId = Number(id);
+    const projectId = id;
 
     console.log(`[Poll] Starting polling for project ${projectId}`);
 
@@ -204,7 +204,7 @@ export const ProjectDetailPage = () => {
 
     setSavingName(true);
     try {
-      const projectId = Number(id);
+      const projectId = id;
       const result = await updateProjectName(projectId, editedDisplayName.trim() || null);
 
       // 更新 store 中的项目数据

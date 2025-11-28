@@ -165,6 +165,7 @@ const initDb = () => {
       audio_path TEXT,            -- 提取后的音频路径 (16kHz WAV)
       original_name TEXT,
       display_name TEXT,          -- 用户自定义的显示名称
+      file_hash TEXT,             -- 文件MD5哈希值，用于检测重复文件
       size INTEGER,
       mime_type TEXT,
       status TEXT DEFAULT 'pending', -- pending, extracting, ready_to_transcribe, transcribing, transcribed, completed, error
@@ -174,6 +175,13 @@ const initDb = () => {
     );
   `);
 
+  // 为 file_hash 字段添加索引（如果不存在）
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_media_files_file_hash ON media_files(file_hash)');
+  } catch (e: any) {
+    // 忽略索引已存在的错误
+  }
+
   // 简单的迁移逻辑：尝试添加新列（如果旧数据库存在）
   // 注意：在生产环境中应使用专门的迁移工具
   const columns = [
@@ -181,7 +189,8 @@ const initDb = () => {
     'error_message TEXT',
     'failed_stage TEXT',
     'duration REAL', // 添加 duration 字段
-    'display_name TEXT' // 添加 display_name 字段
+    'display_name TEXT', // 添加 display_name 字段
+    'file_hash TEXT' // 添加 file_hash 字段
   ];
 
   if (!isTest) {

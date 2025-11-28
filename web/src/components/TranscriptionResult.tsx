@@ -4,7 +4,7 @@ import { getTranscription, TranscriptionResponse, updateTranscription, exportTra
 import { FileText, Copy, Loader2, Download, AlertCircle, Anchor } from 'lucide-react';
 
 interface Props {
-  fileId: number;
+  fileId: string;
   className?: string;
   isEditing?: boolean; // 外部控制的编辑状态
   onEditingChange?: (editing: boolean) => void; // 编辑状态变化回调

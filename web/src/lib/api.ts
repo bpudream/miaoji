@@ -33,7 +33,7 @@ export const api = axios.create({
 // 如果需要修改后端地址，请更新 .env 文件中的 VITE_BACKEND_URL 并重启前端开发服务器
 
 export interface Project {
-  id: number;
+  id: string;
   filename: string;
   original_name: string;
   display_name?: string | null; // 用户自定义的显示名称
@@ -54,11 +54,23 @@ export interface Project {
 // 兼容旧代码
 export type TranscriptionResponse = Project;
 
-export interface UploadResponse {
+export interface DuplicateFileInfo {
+  id: string;
+  name: string;
+  original_name: string;
   status: string;
-  path: string;
-  filename: string;
-  id: number;
+  created_at: string;
+  filepath: string;
+}
+
+export interface UploadResponse {
+  status: 'success' | 'duplicate';
+  path?: string;
+  filename?: string;
+  id?: string;
+  duplicate?: DuplicateFileInfo;
+  file_hash?: string;
+  temp_file_path?: string;
 }
 
 export interface ProjectsResponse {
@@ -71,9 +83,12 @@ export interface ProjectsResponse {
   };
 }
 
-export const uploadFile = async (file: File): Promise<UploadResponse> => {
+export const uploadFile = async (file: File, forceUpload = false): Promise<UploadResponse> => {
   const formData = new FormData();
   formData.append('file', file);
+  if (forceUpload) {
+    formData.append('force_upload', 'true');
+  }
 
   const response = await api.post<UploadResponse>('/upload', formData, {
     headers: {
@@ -83,12 +98,29 @@ export const uploadFile = async (file: File): Promise<UploadResponse> => {
   return response.data;
 };
 
+// 继续上传重复文件（使用临时文件路径）
+export const continueUploadDuplicate = async (
+  tempFilePath: string,
+  fileHash: string,
+  mimeType?: string,
+  originalFilename?: string
+): Promise<UploadResponse> => {
+  const response = await api.post<UploadResponse>('/upload/continue', {
+    temp_file_path: tempFilePath,
+    file_hash: fileHash,
+    mime_type: mimeType,
+    original_filename: originalFilename
+  });
+
+  return response.data;
+};
+
 // 重命名，推荐使用 getProject
-export const getTranscription = async (id: number): Promise<Project> => {
+export const getTranscription = async (id: string): Promise<Project> => {
   return getProject(id);
 };
 
-export const getProject = async (id: number): Promise<Project> => {
+export const getProject = async (id: string): Promise<Project> => {
   const response = await api.get<Project>(`/projects/${id}`);
   return response.data;
 };
@@ -100,7 +132,7 @@ export const getProjects = async (page = 1, pageSize = 10, status?: string): Pro
   return response.data;
 };
 
-export const deleteProject = async (id: number): Promise<void> => {
+export const deleteProject = async (id: string): Promise<void> => {
   await api.delete(`/projects/${id}`);
 };
 
@@ -121,19 +153,19 @@ export interface Summary {
     created_at: string;
 }
 
-export const generateSummary = async (id: number, mode: SummaryMode): Promise<SummaryResponse> => {
+export const generateSummary = async (id: string, mode: SummaryMode): Promise<SummaryResponse> => {
     const response = await api.post<SummaryResponse>(`/projects/${id}/summarize`, { mode });
     return response.data;
 };
 
-export const getSummary = async (id: number, mode?: SummaryMode): Promise<Summary> => {
+export const getSummary = async (id: string, mode?: SummaryMode): Promise<Summary> => {
     const response = await api.get<Summary>(`/projects/${id}/summary`, { params: { mode } });
     return response.data;
 };
 
 export type ExportFormat = 'txt' | 'json' | 'srt';
 
-export const exportTranscription = async (id: number, format: ExportFormat) => {
+export const exportTranscription = async (id: string, format: ExportFormat) => {
   const response = await api.get<Blob>(`/projects/${id}/export`, {
     params: { format },
     responseType: 'blob',
@@ -154,14 +186,14 @@ export const exportTranscription = async (id: number, format: ExportFormat) => {
   };
 };
 
-export const updateTranscription = async (id: number, segments: any[]): Promise<void> => {
+export const updateTranscription = async (id: string, segments: any[]): Promise<void> => {
   await api.put(`/projects/${id}/transcription`, { segments });
 };
 
 // 更新项目显示名称
-export const updateProjectName = async (id: number, displayName: string | null): Promise<{
+export const updateProjectName = async (id: string, displayName: string | null): Promise<{
   status: string;
-  id: number;
+  id: string;
   original_name: string;
   display_name: string | null;
 }> => {
@@ -287,7 +319,7 @@ export interface StoragePathResponse {
 }
 
 export interface MigrateFilesRequest {
-  file_ids: number[];
+  file_ids: string[];
   target_path_id: number;
   delete_source?: boolean;
 }
@@ -297,7 +329,7 @@ export interface MigrateFilesResponse {
   total: number;
   success: number;
   failed: number;
-  results: Array<{ fileId: number; success: boolean; message: string }>;
+  results: Array<{ fileId: string; success: boolean; message: string }>;
 }
 
 // 获取所有存储路径

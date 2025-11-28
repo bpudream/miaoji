@@ -20,7 +20,7 @@ import {
 import { FileMigrationDialog } from './FileMigrationDialog';
 
 interface ProjectActionDialogProps {
-  projectId: number;
+  projectId: string;
   onClose: () => void;
   onDelete?: () => void;
   onMigrationSuccess?: () => void;

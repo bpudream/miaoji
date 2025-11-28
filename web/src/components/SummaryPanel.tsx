@@ -5,7 +5,7 @@ import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 
 interface SummaryPanelProps {
-  projectId: number;
+  projectId: string;
   transcriptionExists: boolean;
   className?: string;
 }
@@ -22,7 +22,7 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
     }
   }, [projectId, mode]);
 
-  const fetchSummary = async (id: number, m: SummaryMode) => {
+  const fetchSummary = async (id: string, m: SummaryMode) => {
     // Don't auto-fetch if we are already loading something else or have data?
     // Actually, we should try to fetch existing summary for this mode.
     setLoading(true);

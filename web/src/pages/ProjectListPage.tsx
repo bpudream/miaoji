@@ -7,18 +7,18 @@ import { ProjectActionDialog } from '../components/ProjectActionDialog';
 
 export const ProjectListPage = () => {
   const { projects, loadProjects, isLoading, removeProject } = useAppStore();
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showMigrationDialog, setShowMigrationDialog] = useState(false);
-  const [migrationFileIds, setMigrationFileIds] = useState<number[]>([]);
+  const [migrationFileIds, setMigrationFileIds] = useState<string[]>([]);
   const [showActionDialog, setShowActionDialog] = useState(false);
-  const [actionDialogProjectId, setActionDialogProjectId] = useState<number | null>(null);
+  const [actionDialogProjectId, setActionDialogProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
 
 
-  const handleOpenActionDialog = (e: React.MouseEvent, projectId: number) => {
+  const handleOpenActionDialog = (e: React.MouseEvent, projectId: string) => {
     e.preventDefault();
     e.stopPropagation();
     setActionDialogProjectId(projectId);
@@ -39,10 +39,10 @@ export const ProjectListPage = () => {
 
   const handleActionDialogMigrationSuccess = async () => {
     await loadProjects();
-    setSelectedIds(new Set());
+    setSelectedIds(new Set<string>());
   };
 
-  const handleSelect = (id: number, checked: boolean) => {
+  const handleSelect = (id: string, checked: boolean) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (checked) {
@@ -56,20 +56,20 @@ export const ProjectListPage = () => {
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedIds(new Set(projects.map(p => p.id)));
+      setSelectedIds(new Set<string>(projects.map(p => p.id)));
     } else {
-      setSelectedIds(new Set());
+      setSelectedIds(new Set<string>());
     }
   };
 
-  const handleMigrate = (fileIds: number[]) => {
+  const handleMigrate = (fileIds: string[]) => {
     setMigrationFileIds(fileIds);
     setShowMigrationDialog(true);
   };
 
   const handleMigrationSuccess = () => {
     loadProjects(); // 重新加载项目列表
-    setSelectedIds(new Set()); // 清空选择
+    setSelectedIds(new Set<string>()); // 清空选择
   };
 
   const handleBatchDelete = async () => {
@@ -97,7 +97,7 @@ export const ProjectListPage = () => {
     }
 
     // 清空选择
-    setSelectedIds(new Set());
+    setSelectedIds(new Set<string>());
 
     // 显示结果
     if (failCount > 0) {
@@ -156,7 +156,7 @@ export const ProjectListPage = () => {
                 删除选中 ({selectedIds.size})
               </button>
               <button
-                onClick={() => setSelectedIds(new Set())}
+                onClick={() => setSelectedIds(new Set<string>())}
                 className="text-gray-600 hover:text-gray-800 px-3 py-2"
               >
                 取消选择

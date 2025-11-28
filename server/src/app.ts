@@ -11,6 +11,7 @@ import queue from './queue';
 import { ollamaService, SummaryMode } from './services/ollama';
 import { StorageService } from './services/storage';
 import { ProjectPathService } from './services/projectPath';
+import { calculateFileHash } from './services/fileHash';
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
@@ -260,53 +261,57 @@ export const buildApp = () => {
     };
   });
 
-  // 文件上传路由
-  fastify.post('/api/upload', async (req, reply) => {
-    const data = await req.file();
+  // 继续上传重复文件的路由
+  fastify.post('/api/upload/continue', async (req, reply) => {
+    const { temp_file_path, file_hash, mime_type, original_filename } = req.body as {
+      temp_file_path: string;
+      file_hash: string;
+      mime_type?: string;
+      original_filename?: string;
+    };
 
-    if (!data) {
-      return reply.code(400).send({ error: 'No file uploaded' });
+    if (!temp_file_path || !file_hash) {
+      return reply.code(400).send({ error: 'Missing required parameters' });
     }
 
-    // 验证文件类型
-    const ALLOWED_TYPES = [
-      'audio/mpeg', 'audio/wav', 'audio/x-m4a', 'audio/mp4', 'audio/aac', 'audio/flac', 'audio/ogg',
-      'video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm'
-    ];
+    if (!fs.existsSync(temp_file_path)) {
+      return reply.code(404).send({ error: 'Temporary file not found' });
+    }
 
-    if (!ALLOWED_TYPES.includes(data.mimetype)) {
-      data.file.resume(); // 丢弃流数据
-      return reply.code(400).send({
-        error: 'Unsupported file type',
-        message: `File type ${data.mimetype} is not allowed.`,
-        allowed: ALLOWED_TYPES
-      });
+    // 验证文件
+    const stats = await fs.promises.stat(temp_file_path);
+    if (stats.size === 0) {
+      fs.unlinkSync(temp_file_path);
+      throw new Error('File upload failed: Empty file');
+    }
+
+    // 获取文件信息
+    const tempFileName = path.basename(temp_file_path);
+    const ext = path.extname(original_filename || tempFileName);
+    const originalFilename = original_filename || tempFileName.replace(/^\d+-/, ''); // 移除时间戳前缀
+
+    // 推断mime_type（如果未提供）
+    let finalMimeType = mime_type;
+    if (!finalMimeType) {
+      // 根据扩展名推断
+      const extMap: Record<string, string> = {
+        '.mp4': 'video/mp4',
+        '.mov': 'video/quicktime',
+        '.avi': 'video/x-msvideo',
+        '.mkv': 'video/x-matroska',
+        '.webm': 'video/webm',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.m4a': 'audio/x-m4a',
+        '.aac': 'audio/aac',
+        '.flac': 'audio/flac',
+        '.ogg': 'audio/ogg'
+      };
+      finalMimeType = extMap[ext.toLowerCase()] || 'audio/mpeg';
     }
 
     // 选择最佳存储路径
     const storagePath = StorageService.getBestStoragePath();
-
-    // 确保目录存在
-    if (!fs.existsSync(storagePath)) {
-      fs.mkdirSync(storagePath, { recursive: true });
-    }
-
-    // 生成临时文件名用于保存
-    const timestamp = Date.now();
-    const ext = path.extname(data.filename);
-    const filename = `${timestamp}-${data.filename}`;
-    const tempFilePath = path.join(storagePath, filename);
-
-    // 先保存到临时位置
-    await pipeline(data.file, fs.createWriteStream(tempFilePath));
-
-    // 验证文件
-    const stats = await fs.promises.stat(tempFilePath);
-    if (stats.size === 0) {
-      fs.unlinkSync(tempFilePath);
-      throw new Error('File upload failed: Empty file');
-    }
-    console.log(`[Upload] Saved ${filename} (${stats.size} bytes)`);
 
     // 生成UUID作为项目ID
     const { randomUUID } = await import('node:crypto');
@@ -316,19 +321,19 @@ export const buildApp = () => {
     ProjectPathService.ensureProjectDir(storagePath, fileId);
     const finalFilePath = ProjectPathService.getOriginalFilePath(storagePath, fileId, ext);
 
-    // 插入数据库（使用UUID作为ID）
+    // 插入数据库（使用UUID作为ID，包含file_hash）
     const stmt = db.prepare(`
-      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(fileId, filename, finalFilePath, data.filename, data.mimetype, 'pending');
+    stmt.run(fileId, tempFileName, finalFilePath, originalFilename, finalMimeType, 'pending', file_hash, stats.size);
 
     try {
-      fs.renameSync(tempFilePath, finalFilePath);
+      fs.renameSync(temp_file_path, finalFilePath);
     } catch (err: any) {
       // 如果移动失败，尝试复制后删除
-      fs.copyFileSync(tempFilePath, finalFilePath);
-      fs.unlinkSync(tempFilePath);
+      fs.copyFileSync(temp_file_path, finalFilePath);
+      fs.unlinkSync(temp_file_path);
     }
 
     // 更新数据库中的文件路径
@@ -339,7 +344,175 @@ export const buildApp = () => {
     return {
       status: 'success',
       path: finalFilePath,
-      filename: filename,
+      filename: tempFileName,
+      id: fileId
+    };
+  });
+
+  // 文件上传路由
+  fastify.post('/api/upload', async (req, reply) => {
+    const storagePath = StorageService.getBestStoragePath();
+    const tempDir = path.join(storagePath, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    let forceUpload = false;
+    let tempFilePath: string | null = null;
+    let originalFilename = '';
+    let mimetype = '';
+    let saved = false;
+
+    try {
+      if (typeof req.parts === 'function') {
+        const parts = req.parts();
+        for await (const part of parts) {
+          if (part.type === 'field' && part.fieldname === 'force_upload') {
+            const value = part.value;
+            const val = typeof value === 'string' ? value : value?.toString?.() ?? '';
+            if (val === 'true' || val === '1') {
+              forceUpload = true;
+            }
+          } else if (part.type === 'file') {
+            originalFilename = part.filename || `upload-${Date.now()}`;
+            mimetype = part.mimetype;
+
+            const ALLOWED_TYPES = [
+              'audio/mpeg',
+              'audio/wav',
+              'audio/x-m4a',
+              'audio/mp4',
+              'audio/aac',
+              'audio/flac',
+              'audio/ogg',
+              'video/mp4',
+              'video/quicktime',
+              'video/x-msvideo',
+              'video/x-matroska',
+              'video/webm'
+            ];
+
+            if (!ALLOWED_TYPES.includes(mimetype)) {
+              await part.toBuffer();
+              return reply.code(400).send({
+                error: 'Unsupported file type',
+                message: `File type ${mimetype} is not allowed.`,
+                allowed: ALLOWED_TYPES
+              });
+            }
+
+            const timestamp = Date.now();
+            const sanitized = path
+              .basename(originalFilename)
+              .replace(/[^a-zA-Z0-9._-]/g, '_');
+            const tempName = `${timestamp}-${sanitized}`;
+            tempFilePath = path.join(tempDir, tempName);
+
+            await pipeline(part.file, fs.createWriteStream(tempFilePath));
+            console.log(`[Upload] File saved to temporary path ${tempFilePath}`);
+            saved = true;
+          }
+        }
+      } else {
+        const data = await req.file();
+        if (data) {
+          originalFilename = data.filename;
+          mimetype = data.mimetype;
+          const timestamp = Date.now();
+          const sanitized = path
+            .basename(originalFilename)
+            .replace(/[^a-zA-Z0-9._-]/g, '_');
+          const tempName = `${timestamp}-${sanitized}`;
+          tempFilePath = path.join(tempDir, tempName);
+          await pipeline(data.file, fs.createWriteStream(tempFilePath));
+          saved = true;
+        }
+      }
+    } catch (err: any) {
+      console.error('[Upload] Failed to store file:', err);
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+      return reply.code(500).send({ error: 'Upload failed during processing' });
+    }
+
+    if (!saved || !tempFilePath) {
+      return reply.code(400).send({ error: 'No file uploaded' });
+    }
+
+    const stats = await fs.promises.stat(tempFilePath);
+    if (stats.size === 0) {
+      fs.unlinkSync(tempFilePath);
+      return reply.code(400).send({ error: 'Empty file' });
+    }
+    console.log(`[Upload] Temporary file ready (${stats.size} bytes): ${tempFilePath}`);
+
+    console.log('[Upload] Calculating file hash...');
+    const fileHash = await calculateFileHash(tempFilePath);
+    console.log(`[Upload] File hash: ${fileHash}`);
+
+    const existingFile = db.prepare(`
+      SELECT id, original_name, display_name, status, created_at, filepath
+      FROM media_files
+      WHERE file_hash = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(fileHash) as {
+      id: string;
+      original_name: string;
+      display_name: string | null;
+      status: string;
+      created_at: string;
+      filepath: string;
+    } | undefined;
+
+    if (existingFile && !forceUpload) {
+      console.log(`[Upload] Duplicate file detected: ${existingFile.id}`);
+      return {
+        status: 'duplicate',
+        duplicate: {
+          id: existingFile.id,
+          name: existingFile.display_name || existingFile.original_name,
+          original_name: existingFile.original_name,
+          status: existingFile.status,
+          created_at: existingFile.created_at,
+          filepath: existingFile.filepath
+        },
+        file_hash: fileHash,
+        temp_file_path: tempFilePath,
+        mime_type: mimetype,
+        original_filename: originalFilename
+      };
+    }
+
+    const { randomUUID } = await import('node:crypto');
+    const fileId = randomUUID();
+
+    const ext = path.extname(originalFilename);
+    ProjectPathService.ensureProjectDir(storagePath, fileId);
+    const finalFilePath = ProjectPathService.getOriginalFilePath(storagePath, fileId, ext);
+
+    const stmt = db.prepare(`
+      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const finalFilename = path.basename(tempFilePath);
+    stmt.run(fileId, finalFilename, finalFilePath, originalFilename, mimetype, 'pending', fileHash, stats.size);
+
+    try {
+      fs.renameSync(tempFilePath, finalFilePath);
+    } catch (err: any) {
+      fs.copyFileSync(tempFilePath, finalFilePath);
+      fs.unlinkSync(tempFilePath);
+    }
+
+    db.prepare('UPDATE media_files SET filepath = ? WHERE id = ?').run(finalFilePath, fileId);
+    queue.add(fileId, finalFilePath);
+
+    return {
+      status: 'success',
+      path: finalFilePath,
+      filename: finalFilename,
       id: fileId
     };
   });

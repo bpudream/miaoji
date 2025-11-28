@@ -1,22 +1,46 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { uploadFile } from '../lib/api';
+import { uploadFile, continueUploadDuplicate, type DuplicateFileInfo } from '../lib/api';
 import { Upload, Loader2, FileAudio, AlertCircle } from 'lucide-react';
 import { clsx } from 'clsx';
+import { DuplicateFileDialog } from '../components/DuplicateFileDialog';
 
 export const UploadPage = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    duplicate: DuplicateFileInfo;
+    fileHash: string;
+    tempFilePath: string;
+    mimeType?: string;
+    originalFilename?: string;
+  } | null>(null);
   const navigate = useNavigate();
 
-  const handleFile = async (file: File) => {
+  const handleFile = async (file: File, forceUpload = false) => {
     setIsUploading(true);
     setError(null);
+    setDuplicateInfo(null);
     try {
-      const res = await uploadFile(file);
-      // 上传成功，跳转到详情页
-      navigate(`/projects/${res.id}`);
+      const res = await uploadFile(file, forceUpload);
+
+      if (res.status === 'duplicate' && res.duplicate && res.file_hash && res.temp_file_path) {
+        // 检测到重复文件
+        setDuplicateInfo({
+          duplicate: res.duplicate,
+          fileHash: res.file_hash,
+          tempFilePath: res.temp_file_path,
+          mimeType: (res as any).mime_type,
+          originalFilename: (res as any).original_filename
+        });
+        setIsUploading(false);
+      } else if (res.status === 'success' && res.id) {
+        // 上传成功，跳转到详情页
+        navigate(`/projects/${res.id}`);
+      } else {
+        throw new Error('Unexpected response format');
+      }
     } catch (err: any) {
       console.error(err);
 
@@ -36,6 +60,38 @@ export const UploadPage = () => {
       setError(errorMessage);
       setIsUploading(false);
     }
+  };
+
+  const handleContinueUpload = async () => {
+    if (!duplicateInfo) return;
+
+    setIsUploading(true);
+    setError(null);
+    try {
+      const res = await continueUploadDuplicate(
+        duplicateInfo.tempFilePath,
+        duplicateInfo.fileHash,
+        duplicateInfo.mimeType,
+        duplicateInfo.originalFilename
+      );
+      if (res.status === 'success' && res.id) {
+        // 上传成功，跳转到详情页
+        navigate(`/projects/${res.id}`);
+      } else {
+        throw new Error('Continue upload failed');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.response?.data?.error || '继续上传失败，请重试');
+      setIsUploading(false);
+    } finally {
+      setDuplicateInfo(null);
+    }
+  };
+
+  const handleCancelDuplicate = () => {
+    setDuplicateInfo(null);
+    setIsUploading(false);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -103,6 +159,14 @@ export const UploadPage = () => {
             <p className="text-sm mt-1 opacity-90">{error}</p>
           </div>
         </div>
+      )}
+
+      {duplicateInfo && (
+        <DuplicateFileDialog
+          duplicate={duplicateInfo.duplicate}
+          onContinue={handleContinueUpload}
+          onCancel={handleCancelDuplicate}
+        />
       )}
     </div>
   );

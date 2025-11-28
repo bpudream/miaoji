@@ -36,7 +36,7 @@ export const MobileProjectDetailPage = () => {
 
     useEffect(() => {
         if (!id) return;
-        const projectId = Number(id);
+        const projectId = id;
         loadProjectRef.current(projectId);
         isPollingRef.current = true;
         transcriptionStartTimeRef.current = null;
