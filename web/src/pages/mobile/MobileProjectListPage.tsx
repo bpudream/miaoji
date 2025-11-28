@@ -39,7 +39,7 @@ const ProjectCard = ({ project }: { project: Project }) => {
                     <div className="p-2 bg-blue-50 rounded-lg text-blue-600 flex-shrink-0">
                         <FileText className="w-5 h-5" />
                     </div>
-                    <h3 className="font-semibold text-gray-900 truncate flex-1 text-sm">{project.original_name}</h3>
+                    <h3 className="font-semibold text-gray-900 truncate flex-1 text-sm">{project.display_name || project.original_name}</h3>
                 </div>
             </div>
             <div className="flex items-center justify-between text-xs text-gray-500">

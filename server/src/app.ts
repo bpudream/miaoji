@@ -10,6 +10,7 @@ import db from './db';
 import queue from './queue';
 import { ollamaService, SummaryMode } from './services/ollama';
 import { StorageService } from './services/storage';
+import { ProjectPathService } from './services/projectPath';
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
@@ -290,32 +291,54 @@ export const buildApp = () => {
       fs.mkdirSync(storagePath, { recursive: true });
     }
 
-    const filename = `${Date.now()}-${data.filename}`;
-    const filepath = path.join(storagePath, filename);
+    // 生成临时文件名用于保存
+    const timestamp = Date.now();
+    const ext = path.extname(data.filename);
+    const filename = `${timestamp}-${data.filename}`;
+    const tempFilePath = path.join(storagePath, filename);
 
-    await pipeline(data.file, fs.createWriteStream(filepath));
+    // 先保存到临时位置
+    await pipeline(data.file, fs.createWriteStream(tempFilePath));
 
     // 验证文件
-    const stats = await fs.promises.stat(filepath);
+    const stats = await fs.promises.stat(tempFilePath);
     if (stats.size === 0) {
+      fs.unlinkSync(tempFilePath);
       throw new Error('File upload failed: Empty file');
     }
     console.log(`[Upload] Saved ${filename} (${stats.size} bytes)`);
 
-    // 插入数据库
+    // 生成UUID作为项目ID
+    const { randomUUID } = await import('node:crypto');
+    const fileId = randomUUID();
+
+    // 使用统一的路径服务创建项目目录并获取最终文件路径
+    ProjectPathService.ensureProjectDir(storagePath, fileId);
+    const finalFilePath = ProjectPathService.getOriginalFilePath(storagePath, fileId, ext);
+
+    // 插入数据库（使用UUID作为ID）
     const stmt = db.prepare(`
-      INSERT INTO media_files (filename, filepath, original_name, mime_type, status)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
+    stmt.run(fileId, filename, finalFilePath, data.filename, data.mimetype, 'pending');
 
-    const info = stmt.run(filename, filepath, data.filename, data.mimetype, 'pending');
+    try {
+      fs.renameSync(tempFilePath, finalFilePath);
+    } catch (err: any) {
+      // 如果移动失败，尝试复制后删除
+      fs.copyFileSync(tempFilePath, finalFilePath);
+      fs.unlinkSync(tempFilePath);
+    }
 
-    const fileId = Number(info.lastInsertRowid);
-    queue.add(fileId, filepath);
+    // 更新数据库中的文件路径
+    db.prepare('UPDATE media_files SET filepath = ? WHERE id = ?').run(finalFilePath, fileId);
+
+    queue.add(fileId, finalFilePath);
 
     return {
       status: 'success',
-      path: filepath,
+      path: finalFilePath,
       filename: filename,
       id: fileId
     };
@@ -396,7 +419,7 @@ export const buildApp = () => {
     const { page = 1, pageSize = 10, status } = request.query as { page?: number, pageSize?: number, status?: string };
     const offset = (Number(page) - 1) * Number(pageSize);
 
-    let sql = 'SELECT id, original_name, status, created_at, filename FROM media_files';
+    let sql = 'SELECT id, original_name, display_name, status, created_at, filename FROM media_files';
     const params: any[] = [];
 
     if (status) {
@@ -480,6 +503,7 @@ export const buildApp = () => {
       id: file.id,
       filename: file.filename,
       original_name: file.original_name,
+      display_name: file.display_name || null, // ✅ 添加 display_name 字段
       status: file.status,
       created_at: file.created_at,
       duration: file.duration, // ✅ 添加 duration 字段
@@ -489,6 +513,38 @@ export const buildApp = () => {
       size: fileSize, // ✅ 添加文件大小
       summary_count: summaryCount?.count || 0, // ✅ 添加总结数量
       transcription
+    };
+  });
+
+  // 更新项目显示名称
+  fastify.put('/api/projects/:id/name', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { display_name } = request.body as { display_name: string | null };
+
+    // 验证项目是否存在
+    const fileStmt = db.prepare('SELECT id FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as { id: string } | undefined;
+
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    // 更新显示名称（允许设置为null以恢复为原始名称）
+    const updateStmt = db.prepare('UPDATE media_files SET display_name = ? WHERE id = ?');
+    updateStmt.run(display_name || null, id);
+
+    // 返回更新后的项目信息
+    const updatedFile = db.prepare('SELECT id, original_name, display_name FROM media_files WHERE id = ?').get(id) as {
+      id: number;
+      original_name: string;
+      display_name: string | null;
+    };
+
+    return {
+      status: 'success',
+      id: updatedFile.id,
+      original_name: updatedFile.original_name,
+      display_name: updatedFile.display_name
     };
   });
 
@@ -809,13 +865,24 @@ export const buildApp = () => {
     }
 
     // 3. 物理文件删除 (不阻塞响应)
+    // 使用统一的路径服务删除整个项目目录
     try {
-      if (fs.existsSync(file.filepath)) {
-        await fs.promises.unlink(file.filepath);
-      }
-      // 同时删除提取的音频文件
-      if (file.audio_path && fs.existsSync(file.audio_path)) {
-        await fs.promises.unlink(file.audio_path);
+      const basePath = ProjectPathService.parseBasePathFromPath(file.filepath);
+      if (basePath) {
+        const projectDir = ProjectPathService.getProjectDir(basePath, id);
+        if (fs.existsSync(projectDir)) {
+          // 删除整个项目目录（包含所有文件）
+          await fs.promises.rm(projectDir, { recursive: true, force: true });
+          console.log(`[Delete] Project directory deleted: ${projectDir}`);
+        }
+      } else {
+        // 如果无法解析基础路径，回退到删除单个文件
+        if (fs.existsSync(file.filepath)) {
+          await fs.promises.unlink(file.filepath);
+        }
+        if (file.audio_path && fs.existsSync(file.audio_path)) {
+          await fs.promises.unlink(file.audio_path);
+        }
       }
     } catch (e) {
       console.error(`[Delete] Failed to delete files:`, e);
@@ -950,11 +1017,61 @@ export const buildApp = () => {
     }
   });
 
+  // 检查文件迁移路径（用于前端检测路径是否相同）
+  fastify.get('/api/projects/:id/migration-info', async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      const file = db.prepare('SELECT filepath FROM media_files WHERE id = ?').get(id) as {
+        filepath: string;
+      } | undefined;
+
+      if (!file || !file.filepath) {
+        return reply.code(404).send({ error: 'Project not found or filepath is missing' });
+      }
+
+      // 尝试获取当前存储路径ID（可能为null，如果文件不在任何配置的存储路径下）
+      let currentPathId: number | null = null;
+      let currentPath: any = null;
+      let isProjectStructure = false; // 是否为项目目录结构
+
+      try {
+        // 检查文件是否已经是项目目录结构
+        isProjectStructure = ProjectPathService.isProjectPath(file.filepath);
+
+        currentPathId = StorageService.getFileStoragePathId(file.filepath);
+        if (currentPathId !== null) {
+          const pathRecord = db.prepare('SELECT * FROM storage_paths WHERE id = ?').get(currentPathId) as any;
+          if (pathRecord) {
+            currentPath = {
+              id: pathRecord.id,
+              name: pathRecord.name,
+              path: pathRecord.path
+            };
+          }
+        }
+      } catch (err: any) {
+        // 如果获取路径信息失败（可能是旧数据或路径配置问题），不影响返回
+        request.log.warn(`Failed to get storage path info for project ${id}:`, err);
+      }
+
+      return {
+        status: 'success',
+        currentPathId: currentPathId ?? null,
+        currentPath: currentPath ?? null,
+        isProjectStructure // 返回是否为项目目录结构
+      };
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.code(500).send({ error: 'Failed to get migration info', details: error.message });
+    }
+  });
+
   // 迁移文件
   fastify.post('/api/storage/migrate', async (request, reply) => {
     try {
       const { file_ids, target_path_id, delete_source = false } = request.body as {
-        file_ids: number[];
+        file_ids: string[];
         target_path_id: number;
         delete_source?: boolean;
       };

@@ -189,7 +189,7 @@ export const ProjectDetailPage = () => {
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">{currentProject.original_name}</h1>
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">{currentProject.display_name || currentProject.original_name}</h1>
               <div className="flex items-center gap-4 text-sm text-gray-500">
                 <span className="flex items-center gap-1">
                   <Clock className="w-4 h-4" />
@@ -213,7 +213,7 @@ export const ProjectDetailPage = () => {
           <div className="detail-content-left-inner-box grid flex-1 space-y-6 min-h-0 overflow-hidden" style={{ gridTemplateRows }}>
             <MediaPlayerPanel
               projectId={currentProject.id}
-              projectName={currentProject.original_name}
+              projectName={currentProject.display_name || currentProject.original_name}
               duration={currentProject.duration}
               isVideo={isVideo}
               hasAudioPath={!!currentProject.audio_path}

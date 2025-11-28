@@ -1,11 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import path from 'node:path';
-import fs from 'node:fs';
 import db from './db';
 import { AudioExtractor } from './services/audio';
+import { ProjectPathService } from './services/projectPath';
+import path from 'node:path';
+import fs from 'node:fs';
 
 interface Task {
-  id: number;
+  id: string;
   filepath: string;
 }
 
@@ -27,7 +28,7 @@ class QueueService {
   /**
    * 添加任务到队列
    */
-  add(id: number, filepath: string) {
+  add(id: string, filepath: string) {
     console.log(`[Queue] Task added: File ID ${id}`);
     this.queue.push({ id, filepath });
     this.processNext();
@@ -36,7 +37,7 @@ class QueueService {
   /**
    * 更新数据库中的任务状态
    */
-  private updateStatus(id: number, status: string, extra: UpdateStatusExtra = {}) {
+  private updateStatus(id: string, status: string, extra: UpdateStatusExtra = {}) {
     const updates: string[] = ['status = ?'];
     const params: any[] = [status];
 
@@ -93,9 +94,44 @@ class QueueService {
       this.updateStatus(task.id, 'extracting');
 
       // 提取音频 (转为 16kHz WAV) 并获取时长
+      // 音频会先提取到原始文件所在目录
       const extracted = await AudioExtractor.extract(task.filepath);
-      audioPath = extracted.path;
+      let tempAudioPath = extracted.path;
       duration = extracted.duration;
+
+      // 使用统一的路径服务获取项目ID和最终音频路径
+      const projectId = task.id;
+      const basePath = ProjectPathService.parseBasePathFromPath(task.filepath);
+
+      if (!basePath) {
+        throw new Error(`无法从文件路径解析存储基础路径: ${task.filepath}`);
+      }
+
+      const finalAudioPath = ProjectPathService.getAudioFilePath(basePath, projectId);
+
+      // 如果音频文件不在项目目录，或者文件名不是 audio.wav，则移动并重命名
+      if (tempAudioPath !== finalAudioPath) {
+        try {
+          if (fs.existsSync(tempAudioPath)) {
+            // 如果目标文件已存在，先删除
+            if (fs.existsSync(finalAudioPath)) {
+              fs.unlinkSync(finalAudioPath);
+            }
+            // 移动并重命名
+            fs.renameSync(tempAudioPath, finalAudioPath);
+            console.log(`[Queue] Audio moved to project directory: ${finalAudioPath}`);
+          }
+        } catch (moveErr: any) {
+          // 如果移动失败，尝试复制后删除
+          console.warn(`[Queue] Failed to move audio file, trying copy: ${moveErr.message}`);
+          if (fs.existsSync(tempAudioPath)) {
+            fs.copyFileSync(tempAudioPath, finalAudioPath);
+            fs.unlinkSync(tempAudioPath);
+          }
+        }
+      }
+
+      audioPath = finalAudioPath;
 
       console.log(`[Queue] Audio extracted: ${audioPath} (Duration: ${duration.toFixed(2)}s)`);
       try {

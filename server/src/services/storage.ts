@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import db from '../db';
+import { ProjectPathService } from './projectPath';
 
 export interface StoragePath {
   id: number;
@@ -50,9 +51,15 @@ export class StorageService {
 
           for (const line of output.split('\n')) {
             if (line.startsWith('Size=')) {
-              size = parseInt(line.split('=')[1].trim(), 10);
+              const sizeValue = line.split('=')[1];
+              if (sizeValue) {
+                size = parseInt(sizeValue.trim(), 10);
+              }
             } else if (line.startsWith('FreeSpace=')) {
-              freeSpace = parseInt(line.split('=')[1].trim(), 10);
+              const freeSpaceValue = line.split('=')[1];
+              if (freeSpaceValue) {
+                freeSpace = parseInt(freeSpaceValue.trim(), 10);
+              }
             }
           }
 
@@ -74,17 +81,25 @@ export class StorageService {
           const output = execSync(`df -k "${dirPath}"`, { encoding: 'utf-8' });
           const lines = output.trim().split('\n');
           if (lines.length >= 2) {
-            const parts = lines[1].split(/\s+/);
-            if (parts.length >= 4) {
-              const total = parseInt(parts[1], 10) * 1024; // 转换为字节
-              const used = parseInt(parts[2], 10) * 1024;
-              const free = parseInt(parts[3], 10) * 1024;
-              return {
-                total,
-                used,
-                free,
-                usagePercent: (used / total) * 100
-              };
+            const line1 = lines[1];
+            if (line1) {
+              const parts = line1.split(/\s+/);
+              if (parts.length >= 4) {
+                const totalStr = parts[1];
+                const usedStr = parts[2];
+                const freeStr = parts[3];
+                if (totalStr && usedStr && freeStr) {
+                  const total = parseInt(totalStr, 10) * 1024; // 转换为字节
+                  const used = parseInt(usedStr, 10) * 1024;
+                  const free = parseInt(freeStr, 10) * 1024;
+                  return {
+                    total,
+                    used,
+                    free,
+                    usagePercent: (used / total) * 100
+                  };
+                }
+              }
             }
           }
         } catch (e) {
@@ -119,10 +134,13 @@ export class StorageService {
 
     for (const path of paths) {
       const info = this.getDiskInfo(path.path);
-      result.push({
-        ...path,
-        info: info || undefined
-      });
+      const pathWithInfo: StoragePathWithInfo = {
+        ...path
+      };
+      if (info) {
+        pathWithInfo.info = info;
+      }
+      result.push(pathWithInfo);
     }
 
     return result;
@@ -313,20 +331,52 @@ export class StorageService {
     }
 
     const info = this.getDiskInfo(pathRecord.path);
-    return {
-      ...pathRecord,
-      info: info || undefined
+    const result: StoragePathWithInfo = {
+      ...pathRecord
     };
+    if (info) {
+      result.info = info;
+    }
+    return result;
+  }
+
+  /**
+   * 获取文件当前所在的存储路径ID
+   * 通过比较文件路径与所有存储路径来确定
+   */
+  static getFileStoragePathId(filepath: string): number | null {
+    if (!filepath) {
+      return null;
+    }
+
+    const paths = this.getAllPaths().filter(p => p.enabled);
+
+    // 标准化路径进行比较
+    const normalizePath = (p: string) => {
+      return path.resolve(p).replace(/\\/g, '/').toLowerCase();
+    };
+
+    const normalizedFilepath = normalizePath(filepath);
+
+    for (const storagePath of paths) {
+      const normalizedStoragePath = normalizePath(storagePath.path);
+      // 检查文件路径是否以存储路径开头
+      if (normalizedFilepath.startsWith(normalizedStoragePath)) {
+        return storagePath.id;
+      }
+    }
+
+    return null;
   }
 
   /**
    * 迁移单个文件到新路径
    */
   static async migrateFile(
-    fileId: number,
+    fileId: string,
     targetPathId: number,
     options: { deleteSource?: boolean } = {}
-  ): Promise<{ success: boolean; message: string; newPath?: string }> {
+  ): Promise<{ success: boolean; message: string; newPath?: string; currentPathId?: number | null }> {
     // 获取文件信息
     const file = db.prepare('SELECT filepath, audio_path FROM media_files WHERE id = ?').get(fileId) as {
       filepath: string;
@@ -337,6 +387,9 @@ export class StorageService {
       throw new Error('文件不存在');
     }
 
+    // 获取文件当前所在的存储路径ID
+    const currentPathId = this.getFileStoragePathId(file.filepath);
+
     // 获取目标路径
     const targetPath = db.prepare('SELECT path FROM storage_paths WHERE id = ?').get(targetPathId) as {
       path: string;
@@ -345,6 +398,26 @@ export class StorageService {
     if (!targetPath) {
       throw new Error('目标存储路径不存在');
     }
+
+    // 计算目标文件路径（使用新的项目目录结构）
+    const sourceExt = path.extname(file.filepath);
+    const targetFilePath = ProjectPathService.getOriginalFilePath(targetPath.path, fileId, sourceExt);
+
+    // 检查目标路径是否与当前路径完全相同
+    // 注意：即使存储路径ID相同，如果文件结构不同（扁平 vs 项目目录），也应该允许迁移
+    const normalizedCurrent = path.resolve(file.filepath).replace(/\\/g, '/');
+    const normalizedTarget = path.resolve(targetFilePath).replace(/\\/g, '/');
+
+    if (normalizedCurrent === normalizedTarget) {
+      return {
+        success: false,
+        message: '目标路径与当前路径完全相同，无需迁移',
+        currentPathId
+      };
+    }
+
+    // 如果存储路径ID相同，但文件结构不同（从扁平结构迁移到项目目录结构），允许迁移
+    // 这种情况需要迁移以转换文件结构
 
     // 验证目标路径
     const validation = this.validatePath(targetPath.path);
@@ -365,20 +438,16 @@ export class StorageService {
     }
 
     try {
+      // 使用统一的路径服务创建项目目录
+      ProjectPathService.ensureProjectDir(targetPath.path, fileId);
+
+      // 获取原始文件扩展名
+      const sourceExt = path.extname(file.filepath);
+      const newFilePath = ProjectPathService.getOriginalFilePath(targetPath.path, fileId, sourceExt);
+
       // 复制主文件
-      const sourceFileName = path.basename(file.filepath);
-      const newFilePath = path.join(targetPath.path, sourceFileName);
-
-      // 如果目标文件已存在，添加时间戳后缀
-      let finalNewPath = newFilePath;
-      if (fs.existsSync(finalNewPath)) {
-        const ext = path.extname(sourceFileName);
-        const name = path.basename(sourceFileName, ext);
-        finalNewPath = path.join(targetPath.path, `${name}_${Date.now()}${ext}`);
-      }
-
       if (fs.existsSync(file.filepath)) {
-        fs.copyFileSync(file.filepath, finalNewPath);
+        fs.copyFileSync(file.filepath, newFilePath);
       } else {
         throw new Error('源文件不存在');
       }
@@ -386,22 +455,13 @@ export class StorageService {
       // 复制音频文件（如果存在）
       let newAudioPath: string | null = null;
       if (file.audio_path && fs.existsSync(file.audio_path)) {
-        const audioFileName = path.basename(file.audio_path);
-        newAudioPath = path.join(targetPath.path, audioFileName);
-
-        // 如果目标文件已存在，添加时间戳后缀
-        if (fs.existsSync(newAudioPath)) {
-          const ext = path.extname(audioFileName);
-          const name = path.basename(audioFileName, ext);
-          newAudioPath = path.join(targetPath.path, `${name}_${Date.now()}${ext}`);
-        }
-
+        newAudioPath = ProjectPathService.getAudioFilePath(targetPath.path, fileId);
         fs.copyFileSync(file.audio_path, newAudioPath);
       }
 
       // 更新数据库
       db.prepare('UPDATE media_files SET filepath = ?, audio_path = ? WHERE id = ?').run(
-        finalNewPath,
+        newFilePath,
         newAudioPath,
         fileId
       );
@@ -424,7 +484,8 @@ export class StorageService {
       return {
         success: true,
         message: '文件迁移成功',
-        newPath: finalNewPath
+        newPath: newFilePath,
+        currentPathId
       };
     } catch (error: any) {
       throw new Error(`文件迁移失败: ${error.message}`);
@@ -435,30 +496,36 @@ export class StorageService {
    * 批量迁移文件
    */
   static async migrateFiles(
-    fileIds: number[],
+    fileIds: string[],
     targetPathId: number,
     options: {
       deleteSource?: boolean;
-      onProgress?: (current: number, total: number, fileId: number, success: boolean, message: string) => void;
+      onProgress?: (current: number, total: number, fileId: string, success: boolean, message: string) => void;
     } = {}
   ): Promise<{
     total: number;
     success: number;
     failed: number;
-    results: Array<{ fileId: number; success: boolean; message: string }>;
+    results: Array<{ fileId: string; success: boolean; message: string }>;
   }> {
-    const results: Array<{ fileId: number; success: boolean; message: string }> = [];
+    const results: Array<{ fileId: string; success: boolean; message: string }> = [];
     let successCount = 0;
     let failedCount = 0;
 
     for (let i = 0; i < fileIds.length; i++) {
       const fileId = fileIds[i];
-      let result: { fileId: number; success: boolean; message: string };
+      if (!fileId) {
+        continue; // 跳过无效的ID
+      }
+
+      let result: { fileId: string; success: boolean; message: string };
 
       try {
-        const migrateResult = await this.migrateFile(fileId, targetPathId, {
-          deleteSource: options.deleteSource
-        });
+        const migrateOptions: { deleteSource?: boolean } = {};
+        if (options.deleteSource !== undefined) {
+          migrateOptions.deleteSource = options.deleteSource;
+        }
+        const migrateResult = await this.migrateFile(fileId, targetPathId, migrateOptions);
         result = {
           fileId,
           success: true,

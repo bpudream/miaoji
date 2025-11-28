@@ -36,6 +36,7 @@ export interface Project {
   id: number;
   filename: string;
   original_name: string;
+  display_name?: string | null; // 用户自定义的显示名称
   status: 'pending' | 'extracting' | 'ready_to_transcribe' | 'transcribing' | 'processing' | 'completed' | 'error';
   created_at: string;
   duration?: number; // 音频时长 (秒)
@@ -155,6 +156,17 @@ export const exportTranscription = async (id: number, format: ExportFormat) => {
 
 export const updateTranscription = async (id: number, segments: any[]): Promise<void> => {
   await api.put(`/projects/${id}/transcription`, { segments });
+};
+
+// 更新项目显示名称
+export const updateProjectName = async (id: number, displayName: string | null): Promise<{
+  status: string;
+  id: number;
+  original_name: string;
+  display_name: string | null;
+}> => {
+  const response = await api.put(`/projects/${id}/name`, { display_name: displayName });
+  return response.data;
 };
 
 export interface NetworkInterface {

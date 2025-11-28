@@ -231,8 +231,8 @@ export const ProjectListPage = () => {
                         <MoreVertical className="w-4 h-4" />
                       </button>
                     </div>
-                    <h3 className="font-semibold text-gray-900 truncate mb-2" title={project.original_name}>
-                      {project.original_name}
+                    <h3 className="font-semibold text-gray-900 truncate mb-2" title={project.display_name || project.original_name}>
+                      {project.display_name || project.original_name}
                     </h3>
                     <div className="flex items-center justify-between text-sm text-gray-500 mt-4">
                       <span className="flex items-center gap-1.5">

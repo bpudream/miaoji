@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getProject, Project } from '../lib/api';
+import { getProject, Project, updateProjectName } from '../lib/api';
 import {
   X,
   Trash2,
@@ -12,7 +12,10 @@ import {
   Music,
   AlertCircle,
   Loader2,
-  CheckCircle2
+  CheckCircle2,
+  Edit2,
+  Save,
+  X as XIcon
 } from 'lucide-react';
 import { FileMigrationDialog } from './FileMigrationDialog';
 
@@ -34,6 +37,9 @@ export const ProjectActionDialog: React.FC<ProjectActionDialogProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [showMigrationDialog, setShowMigrationDialog] = useState(false);
   const [action, setAction] = useState<'none' | 'delete' | 'migrate'>('none');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedDisplayName, setEditedDisplayName] = useState<string>('');
+  const [savingName, setSavingName] = useState(false);
 
   useEffect(() => {
     loadProject();
@@ -62,6 +68,42 @@ export const ProjectActionDialog: React.FC<ProjectActionDialogProps> = ({
 
   const handleMigrate = () => {
     setShowMigrationDialog(true);
+  };
+
+  const handleStartEditName = () => {
+    if (project) {
+      setEditedDisplayName(project.display_name || '');
+      setIsEditingName(true);
+    }
+  };
+
+  const handleCancelEditName = () => {
+    setIsEditingName(false);
+    setEditedDisplayName('');
+  };
+
+  const handleSaveName = async () => {
+    if (!project) return;
+
+    setSavingName(true);
+    try {
+      const result = await updateProjectName(projectId, editedDisplayName.trim() || null);
+      setProject({
+        ...project,
+        display_name: result.display_name
+      });
+      setIsEditingName(false);
+    } catch (err: any) {
+      setError(err.response?.data?.error || '更新项目名称失败');
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  // 获取显示名称（优先使用display_name，否则使用original_name）
+  const getDisplayName = () => {
+    if (!project) return '';
+    return project.display_name || project.original_name;
   };
 
   const formatBytes = (bytes: number): string => {
@@ -157,12 +199,56 @@ export const ProjectActionDialog: React.FC<ProjectActionDialogProps> = ({
               <div>
                 <h3 className="text-sm font-medium text-gray-500 mb-3">基本信息</h3>
                 <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <span className="text-sm text-gray-600">文件名</span>
-                    <span className="text-sm font-medium text-gray-900 text-right max-w-[70%] break-words">
-                      {project.original_name}
-                    </span>
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-sm text-gray-600 flex-shrink-0">项目名称</span>
+                    {isEditingName ? (
+                      <div className="flex-1 flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={editedDisplayName}
+                          onChange={(e) => setEditedDisplayName(e.target.value)}
+                          placeholder={project.original_name}
+                          className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleSaveName}
+                          disabled={savingName}
+                          className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50"
+                          title="保存"
+                        >
+                          <Save className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={handleCancelEditName}
+                          disabled={savingName}
+                          className="p-1.5 text-gray-600 hover:bg-gray-100 rounded transition-colors disabled:opacity-50"
+                          title="取消"
+                        >
+                          <XIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex items-center gap-2 justify-end">
+                        <span className="text-sm font-medium text-gray-900 text-right max-w-[70%] break-words">
+                          {getDisplayName()}
+                        </span>
+                        <button
+                          onClick={handleStartEditName}
+                          className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                          title="编辑名称"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
+                  {project.display_name && (
+                    <div className="flex items-start justify-between text-xs text-gray-500">
+                      <span>原始文件名</span>
+                      <span className="text-right max-w-[70%] break-words">{project.original_name}</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-600 flex items-center gap-1">
                       <Clock className="w-3 h-3" />

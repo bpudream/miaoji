@@ -18,6 +18,16 @@ interface FileMigrationDialogProps {
   onSuccess?: () => void;
 }
 
+interface MigrationInfo {
+  currentPathId: number | null;
+  currentPath: {
+    id: number;
+    name: string;
+    path: string;
+  } | null;
+  isProjectStructure?: boolean; // 是否为项目目录结构（新结构）
+}
+
 export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
   fileIds,
   onClose,
@@ -34,10 +44,14 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
     results: Array<{ fileId: number; success: boolean; message: string }>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [migrationInfo, setMigrationInfo] = useState<MigrationInfo | null>(null);
 
   useEffect(() => {
     loadPaths();
-  }, []);
+    if (fileIds.length === 1) {
+      loadMigrationInfo(fileIds[0]);
+    }
+  }, [fileIds]);
 
   const loadPaths = async () => {
     setLoading(true);
@@ -54,6 +68,45 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
       setLoading(false);
     }
   };
+
+  const loadMigrationInfo = async (fileId: number) => {
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || (window.location.origin + '/api');
+      const response = await fetch(`${apiUrl}/projects/${fileId}/migration-info`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 'success') {
+          setMigrationInfo({
+            currentPathId: data.currentPathId ?? null,
+            currentPath: data.currentPath ?? null,
+            isProjectStructure: data.isProjectStructure ?? false
+          });
+        }
+      } else {
+        // API调用失败，设置为null，不影响迁移功能
+        console.warn('Failed to load migration info, status:', response.status);
+        setMigrationInfo(null);
+      }
+    } catch (err) {
+      // 网络错误或其他错误，设置为null，不影响迁移功能
+      console.warn('Failed to load migration info:', err);
+      setMigrationInfo(null);
+    }
+  };
+
+  // 检查目标路径是否与当前路径相同
+  // 注意：即使存储路径ID相同，如果文件结构不同（扁平 vs 项目目录），也应该允许迁移
+  // 所以这里只检查存储路径ID是否相同，实际的文件路径比较由后端完成
+  const isSameStoragePath = migrationInfo?.currentPathId !== null &&
+                             migrationInfo?.currentPathId !== undefined &&
+                             selectedPathId !== null &&
+                             selectedPathId === migrationInfo.currentPathId;
+
+  // 如果存储路径相同，但文件不是项目目录结构，说明需要迁移以转换结构
+  const needsStructureMigration = isSameStoragePath && !migrationInfo?.isProjectStructure;
+
+  // 只有当存储路径相同且文件已经是项目目录结构时，才认为无需迁移
+  const isSamePath = isSameStoragePath && migrationInfo?.isProjectStructure;
 
   const handleMigrate = async () => {
     if (!selectedPathId) {
@@ -129,6 +182,51 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
                 <p className="text-sm text-gray-600 mb-4">
                   将迁移 <span className="font-semibold">{fileIds.length}</span> 个文件
                 </p>
+
+                {/* 当前路径信息 */}
+                {migrationInfo?.currentPath && (
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="text-xs text-blue-600 font-medium mb-1">当前存储路径</div>
+                    <div className="text-sm text-blue-800 font-semibold">{migrationInfo.currentPath.name}</div>
+                    <div className="text-xs text-blue-600 font-mono mt-1">{migrationInfo.currentPath.path}</div>
+                  </div>
+                )}
+
+                {/* 无法检测当前路径的提示（兼容旧数据） */}
+                {migrationInfo === null && fileIds.length === 1 && (
+                  <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <div className="text-xs text-gray-600 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      无法检测当前存储路径（可能是旧数据），迁移功能仍可正常使用
+                    </div>
+                  </div>
+                )}
+
+                {/* 路径相同警告 */}
+                {isSamePath && (
+                  <div className="mb-4 p-4 bg-amber-50 border-2 border-amber-400 rounded-lg flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="font-semibold text-amber-800 mb-1">目标路径与当前路径完全相同</div>
+                      <div className="text-sm text-amber-700">
+                        您选择的目标路径与文件当前所在路径完全相同，无需进行迁移操作。
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 结构转换提示 */}
+                {needsStructureMigration && (
+                  <div className="mb-4 p-4 bg-blue-50 border-2 border-blue-400 rounded-lg flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="font-semibold text-blue-800 mb-1">将转换文件结构</div>
+                      <div className="text-sm text-blue-700">
+                        文件当前使用扁平结构，迁移后将转换为项目目录结构（{fileIds.length === 1 ? '项目ID目录' : '各项目独立目录'}），这是推荐的结构。
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   选择目标存储路径
@@ -245,7 +343,7 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
               <div className="flex gap-3 pt-4 border-t border-gray-200">
                 <button
                   onClick={handleMigrate}
-                  disabled={migrating || !selectedPathId || paths.length === 0}
+                  disabled={migrating || !selectedPathId || paths.length === 0 || isSamePath}
                   className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                 >
                   {migrating ? (
@@ -253,6 +351,8 @@ export const FileMigrationDialog: React.FC<FileMigrationDialogProps> = ({
                       <Loader2 className="w-4 h-4 animate-spin" />
                       迁移中...
                     </>
+                  ) : isSamePath ? (
+                    '无需迁移'
                   ) : (
                     '开始迁移'
                   )}

@@ -99,7 +99,7 @@ export const MobileProjectDetailPage = () => {
             <div className="flex-shrink-0 bg-white border-b border-gray-200 sticky top-0 z-10">
                  {/* 简单的标题栏 */}
                  <div className="px-4 py-2 flex items-center justify-between border-b border-gray-100">
-                    <h1 className="text-sm font-bold text-gray-900 truncate max-w-[70%]">{currentProject.original_name}</h1>
+                    <h1 className="text-sm font-bold text-gray-900 truncate max-w-[70%]">{currentProject.display_name || currentProject.original_name}</h1>
                     <div className="flex gap-2">
                          {isVideo && (
                             <button
