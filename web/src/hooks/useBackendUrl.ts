@@ -1,7 +1,16 @@
 import { useState, useEffect } from 'react';
 
-// 默认后端端口配置
-const DEFAULT_BACKEND_PORT = '13636';
+// 默认后端端口配置（根据环境区分）
+// 开发环境使用 3000，生产环境使用 13636
+const getDefaultBackendPort = (): string => {
+  // 使用 Vite 的环境变量判断
+  if (import.meta.env.PROD) {
+    return '13636'; // 生产环境
+  }
+  return '3000'; // 开发环境
+};
+
+const DEFAULT_BACKEND_PORT = getDefaultBackendPort();
 
 // 判断是否为生产环境（通过 Nginx 反向代理访问）
 const isProductionMode = (): boolean => {
@@ -19,7 +28,8 @@ export const useBackendUrl = () => {
 
   useEffect(() => {
     // 1. 获取后端端口配置
-    let port = DEFAULT_BACKEND_PORT;
+    // 优先使用环境变量，否则根据当前环境使用默认端口
+    let port = getDefaultBackendPort();
     const envUrl = import.meta.env.VITE_BACKEND_URL;
 
     if (envUrl) {
@@ -60,7 +70,8 @@ export const useBackendUrl = () => {
 
 // 兼容旧的静态获取方法（用于非 React 组件环境，如 axios 实例创建）
 export const getBackendUrlStatic = (): string => {
-  let port = DEFAULT_BACKEND_PORT;
+  // 优先使用环境变量，否则根据当前环境使用默认端口
+  let port = getDefaultBackendPort();
   const envUrl = (import.meta.env as any).VITE_BACKEND_URL as string | undefined;
 
   if (envUrl) {

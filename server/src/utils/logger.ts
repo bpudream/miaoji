@@ -135,21 +135,20 @@ export const createStandaloneLogger = () => {
   const logFile = path.join(logDir, `app-${today}.log`);
   const errorLogFile = path.join(logDir, `error-${today}.log`);
 
+  // 注意：使用 transport.targets 时不能使用自定义 formatters.level
+  // 所以这里只设置基本的配置
   const baseConfig: pino.LoggerOptions = {
     level: logLevel,
     timestamp: pino.stdTimeFunctions.isoTime,
-    formatters: {
-      level: (label) => {
-        return { level: label.toUpperCase() };
-      },
-    },
+    // 移除 formatters.level，因为 transport.targets 不支持
   };
 
   if (!isProduction) {
     try {
       require.resolve('pino-pretty');
       return pino({
-        ...baseConfig,
+        level: logLevel,
+        timestamp: pino.stdTimeFunctions.isoTime,
         transport: {
           targets: [
             {
@@ -180,7 +179,8 @@ export const createStandaloneLogger = () => {
   }
 
   return pino({
-    ...baseConfig,
+    level: logLevel,
+    timestamp: pino.stdTimeFunctions.isoTime,
     transport: {
       targets: [
         {

@@ -51,7 +51,7 @@ export const UploadPage = () => {
         errorMessage = `服务器错误 (${err.response.status}): ${err.response.data?.message || err.response.statusText}`;
       } else if (err.request) {
         // 网络请求发出但无响应
-        errorMessage = '网络连接失败。请检查：1. 手机是否连接了同一WiFi 2. 电脑防火墙是否允许端口 13636 (后端) 和 13737 (前端) 3. 后端服务是否正在运行';
+        errorMessage = '网络连接失败。请检查：1. 手机是否连接了同一WiFi 2. 电脑防火墙是否允许端口 3000 (后端) 和 5173 (前端) 3. 后端服务是否正在运行';
       } else {
         // 其他错误
         errorMessage = err.message || errorMessage;
