@@ -3,6 +3,7 @@
 .vscode/
 .idea/
 *.log
+*.exe
 
 # Environment Variables
 .env
@@ -20,6 +21,7 @@ dist/
 build/
 out/
 output/
+release/
 
 # diagnostics
 diagnostics/

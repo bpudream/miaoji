@@ -4,6 +4,7 @@ import { AudioExtractor } from './services/audio';
 import { ProjectPathService } from './services/projectPath';
 import path from 'node:path';
 import fs from 'node:fs';
+import { getPythonWorkerPath, getPythonPath } from './utils/paths';
 
 interface Task {
   id: string;
@@ -196,11 +197,11 @@ class QueueService {
   private ensurePythonWorker() {
     if (this.pythonWorker) return;
 
-    const workerScript = path.join(__dirname, '../python/worker.py');
-    const venvPython = path.join(__dirname, '../../venv/Scripts/python.exe');
+    const workerScript = getPythonWorkerPath();
+    const pythonPath = getPythonPath();
 
-    console.log(`[Queue] Starting persistent worker: ${venvPython} ${workerScript} --server`);
-    this.pythonWorker = spawn(venvPython, [workerScript, '--server']);
+    console.log(`[Queue] Starting persistent worker: ${pythonPath} ${workerScript} --server`);
+    this.pythonWorker = spawn(pythonPath, [workerScript, '--server']);
     this.pythonWorker.stdout.setEncoding('utf-8');
     this.pythonWorker.stderr.setEncoding('utf-8');
     this.pythonWorkerBuffer = '';

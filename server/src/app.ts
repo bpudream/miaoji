@@ -12,6 +12,7 @@ import { ollamaService, SummaryMode } from './services/ollama';
 import { StorageService } from './services/storage';
 import { ProjectPathService } from './services/projectPath';
 import { calculateFileHash } from './services/fileHash';
+import { DependencyChecker } from './services/dependencyCheck';
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
@@ -1277,10 +1278,24 @@ export const buildApp = () => {
 
 // 启动服务
 const start = async () => {
+  // 执行依赖检查
+  console.log('Checking dependencies...');
+  const checkResults = await DependencyChecker.checkAll();
+  DependencyChecker.printResults(checkResults);
+
+  // 如果有致命错误，可以选择退出或继续启动
+  if (DependencyChecker.hasCriticalErrors(checkResults)) {
+    console.log('⚠️  Critical dependencies are missing. Service will start but may not work properly.');
+    console.log('Press Ctrl+C to exit, or wait 5 seconds to continue anyway...\n');
+
+    // 等待 5 秒，给用户时间取消
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+
   const fastify = buildApp();
   try {
     await fastify.listen({ port: BACKEND_PORT, host: '0.0.0.0' });
-    console.log(`Server listening at http://localhost:${BACKEND_PORT}`);
+    console.log(`\n✓ Server listening at http://localhost:${BACKEND_PORT}`);
     console.log(`Backend port is configured via BACKEND_PORT environment variable (current: ${BACKEND_PORT})`);
   } catch (err) {
     fastify.log.error(err);
