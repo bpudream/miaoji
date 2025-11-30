@@ -5,6 +5,7 @@ import { ProjectPathService } from './services/projectPath';
 import path from 'node:path';
 import fs from 'node:fs';
 import { getPythonWorkerPath, getPythonPath } from './utils/paths';
+import { logger } from './utils/logger';
 
 interface Task {
   id: string;
@@ -30,7 +31,7 @@ class QueueService {
    * 添加任务到队列
    */
   add(id: string, filepath: string) {
-    console.log(`[Queue] Task added: File ID ${id}`);
+    logger.info({ taskId: id, filepath }, 'Task added to queue');
     this.queue.push({ id, filepath });
     this.processNext();
   }
@@ -63,11 +64,11 @@ class QueueService {
     const sql = `UPDATE media_files SET ${updates.join(', ')} WHERE id = ?`;
     const result = db.prepare(sql).run(...params);
 
-    console.log(`[Queue] Status updated for File ID ${id}: ${status} (rows affected: ${result.changes})`);
+    logger.debug({ taskId: id, status, rowsAffected: result.changes }, 'Status updated');
 
     // 验证更新是否成功
     const verify = db.prepare('SELECT status FROM media_files WHERE id = ?').get(id) as any;
-    console.log(`[Queue] Verification - DB status for File ID ${id}: ${verify?.status}`);
+    logger.debug({ taskId: id, verifiedStatus: verify?.status }, 'Status verification');
   }
 
   /**
@@ -83,7 +84,7 @@ class QueueService {
       return;
     }
 
-    console.log(`[Queue] Processing File ID ${task.id}...`);
+    logger.info({ taskId: task.id }, 'Processing task');
     let currentStage = 'pending';
 
     let audioPath: string | null = null;
@@ -120,11 +121,11 @@ class QueueService {
             }
             // 移动并重命名
             fs.renameSync(tempAudioPath, finalAudioPath);
-            console.log(`[Queue] Audio moved to project directory: ${finalAudioPath}`);
+            logger.info({ taskId: task.id, audioPath: finalAudioPath }, 'Audio moved to project directory');
           }
         } catch (moveErr: any) {
           // 如果移动失败，尝试复制后删除
-          console.warn(`[Queue] Failed to move audio file, trying copy: ${moveErr.message}`);
+          logger.warn({ taskId: task.id, err: moveErr }, 'Failed to move audio file, trying copy');
           if (fs.existsSync(tempAudioPath)) {
             fs.copyFileSync(tempAudioPath, finalAudioPath);
             fs.unlinkSync(tempAudioPath);
@@ -134,12 +135,12 @@ class QueueService {
 
       audioPath = finalAudioPath;
 
-      console.log(`[Queue] Audio extracted: ${audioPath} (Duration: ${duration.toFixed(2)}s)`);
+      logger.info({ taskId: task.id, audioPath, duration: duration.toFixed(2) }, 'Audio extracted');
       try {
         const stats = fs.statSync(audioPath);
-        console.log(`[Queue][Diag] Audio file size: ${stats.size} bytes, modified: ${stats.mtime.toISOString()}`);
+        logger.debug({ taskId: task.id, size: stats.size, modified: stats.mtime.toISOString() }, 'Audio file stats');
       } catch (statErr) {
-        console.warn(`[Queue][Diag] Failed to stat audio file ${audioPath}: ${(statErr as Error).message}`);
+        logger.warn({ taskId: task.id, audioPath, err: statErr }, 'Failed to stat audio file');
       }
 
       // 2. Transcribing
@@ -148,7 +149,7 @@ class QueueService {
         audio_path: audioPath,
         duration: duration
       });
-      console.log(`[Queue] Status updated to 'transcribing' for File ID ${task.id}`);
+      logger.debug({ taskId: task.id }, "Status updated to 'transcribing'");
 
       // 调用 Python Worker
       const result = await this.runPythonWorker(audioPath);
@@ -163,10 +164,10 @@ class QueueService {
       // 4. Completed
       currentStage = 'completed';
       this.updateStatus(task.id, 'completed');
-      console.log(`[Queue] Task ${task.id} completed successfully. Status updated to 'completed'.`);
+      logger.info({ taskId: task.id }, 'Task completed successfully');
 
     } catch (error: any) {
-      console.error(`[Queue] Task ${task.id} failed at ${currentStage}:`, error.message);
+      logger.error({ taskId: task.id, stage: currentStage, err: error }, 'Task failed');
 
       if (audioPath && fs.existsSync(audioPath)) {
         try {
@@ -175,9 +176,9 @@ class QueueService {
           const diagFilename = `${task.id}-${Date.now()}-${path.basename(audioPath)}`;
           const diagPath = path.join(diagnosticsDir, diagFilename);
           fs.copyFileSync(audioPath, diagPath);
-          console.log(`[Queue][Diag] Copied failing audio to ${diagPath}`);
+          logger.debug({ taskId: task.id, diagPath }, 'Copied failing audio to diagnostics');
         } catch (copyErr) {
-          console.warn(`[Queue][Diag] Failed to copy audio for diagnostics: ${(copyErr as Error).message}`);
+          logger.warn({ taskId: task.id, err: copyErr }, 'Failed to copy audio for diagnostics');
         }
       }
 
@@ -200,7 +201,7 @@ class QueueService {
     const workerScript = getPythonWorkerPath();
     const pythonPath = getPythonPath();
 
-    console.log(`[Queue] Starting persistent worker: ${pythonPath} ${workerScript} --server`);
+    logger.info({ pythonPath, workerScript }, 'Starting persistent worker');
     this.pythonWorker = spawn(pythonPath, [workerScript, '--server']);
     this.pythonWorker.stdout.setEncoding('utf-8');
     this.pythonWorker.stderr.setEncoding('utf-8');
@@ -219,11 +220,11 @@ class QueueService {
     });
 
     this.pythonWorker.stderr.on('data', (data) => {
-      console.error(`[Worker][stderr] ${data}`);
+      logger.error({ stderr: data.toString().trim() }, 'Worker stderr');
     });
 
     this.pythonWorker.on('close', (code) => {
-      console.error(`[Worker] exited with code ${code}`);
+      logger.error({ exitCode: code }, 'Worker exited');
       if (this.pendingWorkerRequest) {
         this.pendingWorkerRequest.reject(new Error(`Worker exited with code ${code}`));
         this.pendingWorkerRequest = null;
@@ -232,7 +233,7 @@ class QueueService {
     });
 
     this.pythonWorker.on('error', (err) => {
-      console.error(`[Worker] process error: ${err.message}`);
+      logger.error({ err }, 'Worker process error');
       if (this.pendingWorkerRequest) {
         this.pendingWorkerRequest.reject(err);
         this.pendingWorkerRequest = null;
@@ -269,7 +270,7 @@ class QueueService {
     try {
       message = JSON.parse(line);
     } catch (error) {
-      console.error('[Worker] Failed to parse message:', line);
+      logger.error({ line, err: error }, 'Failed to parse worker message');
       if (this.pendingWorkerRequest) {
         this.pendingWorkerRequest.reject(new Error('Invalid response from worker'));
         this.pendingWorkerRequest = null;
@@ -278,7 +279,7 @@ class QueueService {
     }
 
     if (!this.pendingWorkerRequest) {
-      console.warn('[Worker] Received message without pending request:', message);
+      logger.warn({ message }, 'Received message without pending request');
       return;
     }
 

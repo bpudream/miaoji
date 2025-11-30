@@ -5,6 +5,7 @@ import multipart from '@fastify/multipart';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import db from './db';
 import queue from './queue';
@@ -13,35 +14,45 @@ import { StorageService } from './services/storage';
 import { ProjectPathService } from './services/projectPath';
 import { calculateFileHash } from './services/fileHash';
 import { DependencyChecker } from './services/dependencyCheck';
+import { createLoggerConfig, logger } from './utils/logger';
+import { startLogCleanupScheduler } from './utils/logCleanup';
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
 
 export const buildApp = () => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  let loggerConfig: any = true; // Default production logger (JSON)
-
-  // Only attempt to use pino-pretty if not in production
-  if (!isProduction) {
-    try {
-      require.resolve('pino-pretty');
-      loggerConfig = {
-        transport: {
-          target: 'pino-pretty',
-          options: {
-            translateTime: 'HH:MM:ss Z',
-            ignore: 'pid,hostname',
-          },
-        },
-      };
-    } catch (e) {
-      // pino-pretty not installed, fallback to default logger
-      // console.warn('pino-pretty not found, using default JSON logger');
-    }
-  }
+  // 使用新的日志配置
+  const loggerConfig = createLoggerConfig();
 
   const fastify = Fastify({
-    logger: loggerConfig
+    logger: loggerConfig,
+    requestIdLogLabel: 'requestId', // 请求ID的标签
+    genReqId: () => randomUUID(), // 生成请求ID
+  });
+
+  // 添加请求ID追踪中间件
+  fastify.addHook('onRequest', async (request, reply) => {
+    // 请求ID已经由 Fastify 自动生成并添加到 request.id
+    // 记录请求开始时间
+    (request as any).startTime = Date.now();
+    request.log.info({
+      method: request.method,
+      url: request.url,
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    }, 'Incoming request');
+  });
+
+  // 添加响应日志中间件
+  fastify.addHook('onResponse', async (request, reply) => {
+    const startTime = (request as any).startTime || Date.now();
+    const responseTime = Date.now() - startTime;
+    request.log.info({
+      method: request.method,
+      url: request.url,
+      statusCode: reply.statusCode,
+      responseTime: `${responseTime}ms`,
+    }, 'Request completed');
   });
 
   // 注册插件
@@ -424,7 +435,7 @@ export const buildApp = () => {
             tempFilePath = path.join(tempDir, tempName);
 
             await pipeline(part.file, fs.createWriteStream(tempFilePath));
-            console.log(`[Upload] File saved to temporary path ${tempFilePath}`);
+            req.log.info({ tempFilePath, filename: originalFilename }, 'File saved to temporary path');
             saved = true;
           }
         }
@@ -444,7 +455,7 @@ export const buildApp = () => {
         }
       }
     } catch (err: any) {
-      console.error('[Upload] Failed to store file:', err);
+      req.log.error({ err, tempFilePath }, 'Failed to store file');
       if (tempFilePath && fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
@@ -460,11 +471,11 @@ export const buildApp = () => {
       fs.unlinkSync(tempFilePath);
       return reply.code(400).send({ error: 'Empty file' });
     }
-    console.log(`[Upload] Temporary file ready (${stats.size} bytes): ${tempFilePath}`);
+    req.log.info({ size: stats.size, tempFilePath }, 'Temporary file ready');
 
-    console.log('[Upload] Calculating file hash...');
+    req.log.debug('Calculating file hash...');
     const fileHash = await calculateFileHash(tempFilePath);
-    console.log(`[Upload] File hash: ${fileHash}`);
+    req.log.debug({ fileHash }, 'File hash calculated');
 
     const existingFile = db.prepare(`
       SELECT id, original_name, display_name, status, created_at, filepath
@@ -482,7 +493,7 @@ export const buildApp = () => {
     } | undefined;
 
     if (existingFile && !forceUpload) {
-      console.log(`[Upload] Duplicate file detected: ${existingFile.id}`);
+      req.log.info({ existingFileId: existingFile.id, fileHash }, 'Duplicate file detected');
       return {
         status: 'duplicate',
         duplicate: {
@@ -653,7 +664,7 @@ export const buildApp = () => {
       return reply.code(404).send({ error: 'Project not found' });
     }
 
-    console.log(`[API] GET /api/projects/${id} - Current status: ${file.status}`);
+    request.log.debug({ projectId: id, status: file.status }, 'Getting project details');
 
     let transcription = null;
     // 即使未完成，也可能想看详情，这里不做 status 限制，只查有没有 result
@@ -666,9 +677,9 @@ export const buildApp = () => {
           ...result,
           content: result.format === 'json' ? JSON.parse(result.content) : result.content
         };
-        console.log(`[API] Fetched transcription for ${id}. Format: ${result.format}, Content Type: ${typeof transcription.content}`);
+        request.log.debug({ projectId: id, format: result.format }, 'Fetched transcription');
       } catch (e) {
-        console.error(`[API] Failed to parse transcription content for ${id}:`, e);
+        request.log.error({ projectId: id, err: e }, 'Failed to parse transcription content');
         transcription = result;
       }
     }
@@ -680,7 +691,7 @@ export const buildApp = () => {
         const stats = fs.statSync(file.filepath);
         fileSize = stats.size;
       } catch (e) {
-        console.warn(`[API] Failed to get file size for ${file.filepath}:`, e);
+        request.log.warn({ filepath: file.filepath, err: e }, 'Failed to get file size');
       }
     }
 
@@ -1061,7 +1072,7 @@ export const buildApp = () => {
         if (fs.existsSync(projectDir)) {
           // 删除整个项目目录（包含所有文件）
           await fs.promises.rm(projectDir, { recursive: true, force: true });
-          console.log(`[Delete] Project directory deleted: ${projectDir}`);
+          request.log.info({ projectId: id, projectDir }, 'Project directory deleted');
         }
       } else {
         // 如果无法解析基础路径，回退到删除单个文件
@@ -1073,7 +1084,7 @@ export const buildApp = () => {
         }
       }
     } catch (e) {
-      console.error(`[Delete] Failed to delete files:`, e);
+      request.log.error({ projectId: id, err: e }, 'Failed to delete files');
     }
 
     return { status: 'success', id };
@@ -1293,14 +1304,14 @@ export const buildApp = () => {
 // 启动服务
 const start = async () => {
   // 执行依赖检查
-  console.log('Checking dependencies...');
+  logger.info('Checking dependencies...');
   const checkResults = await DependencyChecker.checkAll();
   DependencyChecker.printResults(checkResults);
 
   // 如果有致命错误，可以选择退出或继续启动
   if (DependencyChecker.hasCriticalErrors(checkResults)) {
-    console.log('⚠️  Critical dependencies are missing. Service will start but may not work properly.');
-    console.log('Press Ctrl+C to exit, or wait 5 seconds to continue anyway...\n');
+    logger.warn('Critical dependencies are missing. Service will start but may not work properly.');
+    logger.warn('Press Ctrl+C to exit, or wait 5 seconds to continue anyway...');
 
     // 等待 5 秒，给用户时间取消
     await new Promise(resolve => setTimeout(resolve, 5000));
@@ -1308,11 +1319,15 @@ const start = async () => {
 
   const fastify = buildApp();
   try {
+    // 启动日志清理任务（每天清理一次，保留7天）
+    startLogCleanupScheduler(7, 24);
+    logger.info('Log cleanup scheduler started (cleanup every 24 hours, keep 7 days)');
+
     await fastify.listen({ port: BACKEND_PORT, host: '0.0.0.0' });
-    console.log(`\n✓ Server listening at http://localhost:${BACKEND_PORT}`);
-    console.log(`Backend port is configured via BACKEND_PORT environment variable (current: ${BACKEND_PORT})`);
+    logger.info({ port: BACKEND_PORT }, 'Server listening');
+    logger.info({ port: BACKEND_PORT }, 'Backend port is configured via BACKEND_PORT environment variable');
   } catch (err) {
-    fastify.log.error(err);
+    logger.error({ err }, 'Failed to start server');
     process.exit(1);
   }
 };

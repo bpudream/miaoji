@@ -16,7 +16,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^24.10.1",
-    "pino-pretty": "^13.0.0",
+    "pino-pretty": "^13.1.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^2.1.0"
