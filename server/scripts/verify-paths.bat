@@ -6,20 +6,35 @@ echo Path Verification Script
 echo ========================================
 echo.
 
-REM 获取脚本所在目录
+REM 获取脚本所在目录，并解析 server 目录
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+for %%a in ("%SCRIPT_DIR%\..") do set "SCRIPT_PARENT=%%~fa"
 
-REM 如果脚本在 scripts 子目录中，向上退一级到 server 目录
-if "%SCRIPT_DIR:~-7%"=="\scripts" (
-    set "SERVER_DIR=%SCRIPT_DIR:~0,-7%"
-) else (
-    set "SERVER_DIR=%SCRIPT_DIR%"
+set "SERVER_DIR="
+if exist "%SCRIPT_PARENT%\package.json" (
+    set "SERVER_DIR=%SCRIPT_PARENT%"
+) else if exist "%SCRIPT_PARENT%\server\package.json" (
+    set "SERVER_DIR=%SCRIPT_PARENT%\server"
+) else if exist "%SCRIPT_DIR%\server\package.json" (
+    set "SERVER_DIR=%SCRIPT_DIR%\server"
+)
+
+if not defined SERVER_DIR (
+    echo [ERROR] Unable to locate server directory (package.json not found)
+    pause
+    exit /b 1
+)
+for %%a in ("%SERVER_DIR%\..") do set "SERVER_PARENT=%%~fa"
+set "TOOLS_DIR=%SERVER_DIR%\tools"
+if exist "%SERVER_PARENT%\tools" (
+    set "TOOLS_DIR=%SERVER_PARENT%\tools"
 )
 
 echo Script Location: %~f0
 echo Script Directory: %SCRIPT_DIR%
 echo Server Directory: %SERVER_DIR%
+echo Tools Directory: %TOOLS_DIR%
 echo Current Working Directory: %CD%
 echo.
 
@@ -40,12 +55,16 @@ if exist "%APP_JS%" (
 )
 
 REM 检查 NSSM
-set "NSSM_PATH=%SERVER_DIR%\tools\nssm.exe"
+set "NSSM_PATH=%TOOLS_DIR%\nssm.exe"
 if exist "%NSSM_PATH%" (
     echo [OK] NSSM: %NSSM_PATH%
 ) else (
     echo [WARNING] NSSM not found: %NSSM_PATH%
-    echo            Run: tools\download-nssm.bat
+    if exist "%TOOLS_DIR%\download-nssm.bat" (
+        echo            Run: %TOOLS_DIR%\download-nssm.bat
+    ) else (
+        echo            Download from https://nssm.cc/download and copy to %TOOLS_DIR%
+    )
 )
 
 REM 检查 .env

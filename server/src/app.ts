@@ -18,16 +18,30 @@ import { DependencyChecker } from './services/dependencyCheck';
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
 
 export const buildApp = () => {
-  const fastify = Fastify({
-    logger: {
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname',
+  const isProduction = process.env.NODE_ENV === 'production';
+  let loggerConfig: any = true; // Default production logger (JSON)
+
+  // Only attempt to use pino-pretty if not in production
+  if (!isProduction) {
+    try {
+      require.resolve('pino-pretty');
+      loggerConfig = {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            translateTime: 'HH:MM:ss Z',
+            ignore: 'pid,hostname',
+          },
         },
-      },
+      };
+    } catch (e) {
+      // pino-pretty not installed, fallback to default logger
+      // console.warn('pino-pretty not found, using default JSON logger');
     }
+  }
+
+  const fastify = Fastify({
+    logger: loggerConfig
   });
 
   // 注册插件

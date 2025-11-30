@@ -13,6 +13,7 @@
 ## 快速开始
 
 > **重要提示**：
+> - **发布目录结构**：`release/` 下包含 `server/`、`scripts/`、`tools/`。以下命令默认在 release 根目录执行（如 `scripts\*.bat`、`tools\*.bat`）；源码仓库中对应路径为 `server\scripts\*.bat`、`server\tools\*.bat`。
 > - **脚本可以从任何目录运行**：所有脚本使用绝对路径，不依赖当前工作目录
 > - **查看日志需要从 server 目录运行**：或使用绝对路径
 
@@ -20,23 +21,23 @@
 
 ```bash
 # 方法 1：使用下载脚本（推荐）
-# 从 server 目录运行
+# 从 release 根目录运行（源码仓库则在 server 目录运行）
 tools\download-nssm.bat
 
 # 方法 2：手动下载
 # 访问 https://nssm.cc/download
 # 下载 nssm-2.24.zip
-# 解压 nssm.exe 到 server\tools\nssm.exe
+# 解压 nssm.exe 到 release\tools\nssm.exe（源码仓库路径：server\tools\nssm.exe）
 ```
 
 ### 2. 验证路径（可选）
 
 ```bash
 # 可以从任何目录运行（脚本会自动找到 server 目录）
-D:\path\to\server\scripts\verify-paths.bat
+D:\path\to\release\scripts\verify-paths.bat
 
-# 或者从 server 目录运行
-cd D:\path\to\server
+# 或者从 release 根目录运行
+cd D:\path\to\release
 scripts\verify-paths.bat
 ```
 
@@ -45,10 +46,10 @@ scripts\verify-paths.bat
 ```bash
 # 右键以管理员身份运行
 # 可以从任何目录运行
-D:\path\to\server\scripts\install-service.bat
+D:\path\to\release\scripts\install-service.bat
 
-# 或者从 server 目录运行
-cd D:\path\to\server
+# 或者从 release 根目录运行
+cd D:\path\to\release
 scripts\install-service.bat
 ```
 
@@ -95,7 +96,7 @@ curl http://localhost:3000/api/health
 # 可以从任何目录运行
 scripts\start-service.bat
 # 或使用完整路径
-D:\path\to\server\scripts\start-service.bat
+D:\path\to\release\scripts\start-service.bat
 # 或使用 Windows 命令（可从任何目录运行）
 net start MiaojiBackend
 ```
@@ -105,7 +106,7 @@ net start MiaojiBackend
 # 可以从任何目录运行
 scripts\stop-service.bat
 # 或使用完整路径
-D:\path\to\server\scripts\stop-service.bat
+D:\path\to\release\scripts\stop-service.bat
 # 或使用 Windows 命令（可从任何目录运行）
 net stop MiaojiBackend
 ```
@@ -115,7 +116,7 @@ net stop MiaojiBackend
 # 可以从任何目录运行
 scripts\restart-service.bat
 # 或使用完整路径
-D:\path\to\server\scripts\restart-service.bat
+D:\path\to\release\scripts\restart-service.bat
 ```
 
 ### 查看服务状态
@@ -141,7 +142,7 @@ type D:\path\to\server\logs\service-err.log
 # 可以从任何目录运行
 scripts\uninstall-service.bat
 # 或使用完整路径
-D:\path\to\server\scripts\uninstall-service.bat
+D:\path\to\release\scripts\uninstall-service.bat
 ```
 
 ## 服务配置
@@ -216,16 +217,15 @@ D:\path\to\server\scripts\uninstall-service.bat
 
 ### 修改服务配置
 
-使用 NSSM GUI：
+使用 NSSM GUI（在 release 根目录运行，如源码仓库则位于 server 目录）：
 ```bash
-# 从 server 目录运行
 tools\nssm.exe edit MiaojiBackend
 ```
 
 或使用命令行：
 ```bash
-# 从 server 目录运行
-# 修改工作目录
+# 从 release 根目录运行
+# 修改工作目录（根据实际 server 路径调整）
 tools\nssm.exe set MiaojiBackend AppDirectory "C:\path\to\server"
 
 # 修改环境变量
@@ -252,14 +252,14 @@ tools\nssm.exe set MiaojiBackend Start SERVICE_AUTO_START
 ### 禁用自动启动
 
 ```bash
-# 从 server 目录运行
+# 从 release 根目录运行
 tools\nssm.exe set MiaojiBackend Start SERVICE_DEMAND_START
 ```
 
 ### 修改重启延迟
 
 ```bash
-# 从 server 目录运行
+# 从 release 根目录运行
 # 设置为 10 秒
 tools\nssm.exe set MiaojiBackend AppRestartDelay 10000
 ```
@@ -292,7 +292,7 @@ tools\nssm.exe set MiaojiBackend AppRestartDelay 10000
 ## 卸载服务
 
 ```bash
-# 右键以管理员身份运行
+# 右键以管理员身份运行（推荐在 release 根目录执行）
 scripts\uninstall-service.bat
 ```
 
@@ -317,20 +317,20 @@ scripts\uninstall-service.bat
 **所有脚本都可以从任何目录运行**，因为脚本使用 `%~dp0` 自动获取脚本所在目录，然后自动找到 server 目录。
 
 ```bash
-# 方式 1：从 server 目录运行（推荐，更简洁）
-cd D:\path\to\server
+# 方式 1：从 release 根目录运行（推荐，更简洁）
+cd D:\path\to\release
 scripts\start-service.bat
 
 # 方式 2：从任何目录运行（使用完整路径）
-D:\path\to\server\scripts\start-service.bat
+D:\path\to\release\scripts\start-service.bat
 
 # 方式 3：从任何目录运行（如果 scripts 在 PATH 中）
 start-service.bat
 ```
 
 **注意**：
-- ✅ 脚本本身不依赖当前工作目录
-- ✅ 只有安装和卸载脚本需要 nssm.exe
+- ✅ 脚本本身不依赖当前工作目录（release 根目录与源码 server 目录均可）
+- ✅ 只有安装和卸载脚本需要 nssm.exe（位于 release\tools 或 server\tools）
 - ⚠️ 查看日志需要使用绝对路径，或从 server 目录运行
 
 ## 参考资源

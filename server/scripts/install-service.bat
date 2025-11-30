@@ -15,17 +15,29 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
-REM 获取脚本所在目录
-REM %~dp0 返回脚本文件的驱动器和路径（不依赖当前工作目录）
+REM 获取脚本所在目录并解析 server 目录
 set "SCRIPT_DIR=%~dp0"
-REM 移除末尾的反斜杠（如果有）
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+for %%a in ("%SCRIPT_DIR%\..") do set "SCRIPT_PARENT=%%~fa"
 
-REM 如果脚本在 scripts 子目录中，向上退一级到 server 目录
-if "%SCRIPT_DIR:~-7%"=="\scripts" (
-    set "SERVER_DIR=%SCRIPT_DIR:~0,-7%"
-) else (
-    set "SERVER_DIR=%SCRIPT_DIR%"
+set "SERVER_DIR="
+if exist "%SCRIPT_PARENT%\package.json" (
+    set "SERVER_DIR=%SCRIPT_PARENT%"
+) else if exist "%SCRIPT_PARENT%\server\package.json" (
+    set "SERVER_DIR=%SCRIPT_PARENT%\server"
+) else if exist "%SCRIPT_DIR%\server\package.json" (
+    set "SERVER_DIR=%SCRIPT_DIR%\server"
+)
+
+if not defined SERVER_DIR (
+    echo [ERROR] Unable to locate server directory (package.json not found)
+    pause
+    exit /b 1
+)
+for %%a in ("%SERVER_DIR%\..") do set "SERVER_PARENT=%%~fa"
+set "TOOLS_DIR=%SERVER_DIR%\tools"
+if exist "%SERVER_PARENT%\tools" (
+    set "TOOLS_DIR=%SERVER_PARENT%\tools"
 )
 set "NODE_EXE=node.exe"
 set "SERVICE_NAME=MiaojiBackend"
@@ -38,9 +50,9 @@ echo ========================================
 echo Script Location: %~f0
 echo Server Directory: %SERVER_DIR%
 echo.
-echo NOTE: This script uses the script's directory as the server directory.
-echo       It does NOT depend on the current working directory.
-echo       You can run this script from anywhere.
+echo NOTE: This script auto-detects the server directory based on package.json.
+echo       You can run it from the release root (scripts\install-service.bat)
+echo       or from the source repo (server\scripts\install-service.bat).
 echo.
 pause
 
@@ -58,6 +70,7 @@ echo [SUCCESS] Node.js found: %NODE_PATH%
 echo.
 echo Current working directory: %CD%
 echo Server directory (used by script): %SERVER_DIR%
+echo Tools directory (for NSSM): %TOOLS_DIR%
 
 echo.
 echo [2/5] Checking service files...
@@ -72,16 +85,20 @@ echo [SUCCESS] Service file found: %APP_JS%
 
 echo.
 echo [3/5] Checking NSSM...
-set "NSSM_PATH=%SERVER_DIR%\tools\nssm.exe"
+set "NSSM_PATH=%TOOLS_DIR%\nssm.exe"
 if not exist "%NSSM_PATH%" (
     echo [WARNING] NSSM not found at %NSSM_PATH%
     echo.
     echo Please download NSSM:
     echo 1. Visit: https://nssm.cc/download
     echo 2. Download the latest release (nssm-2.24.zip)
-    echo 3. Extract nssm.exe to: %SERVER_DIR%\tools\nssm.exe
+    echo 3. Extract nssm.exe to: %TOOLS_DIR%\nssm.exe
     echo.
-    echo Or run: tools\download-nssm.bat
+    if exist "%TOOLS_DIR%\download-nssm.bat" (
+        echo Or run: %TOOLS_DIR%\download-nssm.bat
+    ) else (
+        echo Or place download-nssm.bat alongside tools and rerun.
+    )
     pause
     exit /b 1
 )

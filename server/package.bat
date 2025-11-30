@@ -8,6 +8,8 @@ echo.
 
 set "RELEASE_DIR=release"
 set "RELEASE_SERVER_DIR=%RELEASE_DIR%\server"
+set "RELEASE_SCRIPTS_DIR=%RELEASE_DIR%\scripts"
+set "RELEASE_TOOLS_DIR=%RELEASE_DIR%\tools"
 
 echo [1/5] Cleaning old build files...
 if exist dist (
@@ -55,8 +57,9 @@ if exist python (
 
 echo Copying tools directory (NSSM, etc.)...
 if exist tools (
-    xcopy /E /I /Y tools %RELEASE_SERVER_DIR%\tools >nul
-    echo [SUCCESS] Tools directory copied
+    mkdir %RELEASE_TOOLS_DIR% 2>nul
+    xcopy /E /I /Y tools %RELEASE_TOOLS_DIR% >nul
+    echo [SUCCESS] Tools directory copied to %RELEASE_TOOLS_DIR%
 ) else (
     echo [WARNING] Tools directory not found
 )
@@ -72,8 +75,9 @@ if exist ..\models (
 
 echo Copying service management scripts...
 if exist scripts (
-    xcopy /E /I /Y scripts %RELEASE_SERVER_DIR%\scripts >nul
-    echo [SUCCESS] Service management scripts copied
+    mkdir %RELEASE_SCRIPTS_DIR% 2>nul
+    xcopy /E /I /Y scripts %RELEASE_SCRIPTS_DIR% >nul
+    echo [SUCCESS] Service management scripts copied to %RELEASE_SCRIPTS_DIR%
 ) else (
     echo [WARNING] Scripts directory not found
 )
@@ -88,15 +92,11 @@ mkdir %RELEASE_SERVER_DIR%\data 2>nul
 mkdir %RELEASE_SERVER_DIR%\uploads 2>nul
 
 echo.
-echo [5/5] Installing production dependencies...
-cd %RELEASE_SERVER_DIR%
-call npm install --production
-cd ..\..
-if errorlevel 1 (
-    echo [WARNING] npm install failed, you may need to install dependencies manually
-) else (
-    echo [SUCCESS] Production dependencies installed
-)
+echo [5/5] Package creation completed!
+echo.
+echo NOTE: node_modules will NOT be included in the package.
+echo       Dependencies should be installed on the target machine.
+echo       This ensures compatibility with the target environment.
 
 echo.
 echo Checking environment configuration...
@@ -120,22 +120,28 @@ echo Package contents:
 echo   - server/
 echo     - dist/              Compiled JavaScript files
 echo     - python/            Python worker scripts
-echo     - scripts/           Service management scripts (install, start, stop, etc.)
-echo     - tools/              NSSM and other tools (if found)
-echo     - node_modules/      Production dependencies
 echo     - data/              Database directory (empty, will be created at runtime)
 echo     - uploads/           Upload directory (empty, will be created at runtime)
 echo     - package.json       Project configuration
+echo     - package-lock.json  Dependency lock file
 echo     - env.template       Environment variable template
+echo   - scripts/             Service management scripts (install, start, stop, etc.)
+echo   - tools/               NSSM and helper scripts (if found)
 echo   - models/              Whisper model files (if found)
 echo.
-echo Next steps:
-echo 1. Navigate to: cd %RELEASE_DIR%\server
-echo 2. Copy env.template to .env and configure it
-echo 3. Ensure Python dependencies are installed (faster-whisper)
-echo 4. Ensure FFmpeg and Ollama are installed
-echo 5. Verify models/large-v3 directory exists (should be in %RELEASE_DIR%\models\large-v3)
-echo 6. Install Windows service (optional): scripts\install-service.bat
-echo 7. Or run directly: npm start
+echo IMPORTANT: node_modules is NOT included!
+echo           Dependencies must be installed on the target machine.
+echo.
+echo Next steps (on target machine):
+echo 1. Copy the release directory to target machine
+echo 2. Navigate to the release root: cd %RELEASE_DIR%
+echo 3. Install dependencies: scripts\install-dependencies.bat
+echo    (or from server dir: ..\scripts\install-dependencies.bat)
+echo 4. Copy server\env.template to server\.env and configure it
+echo 5. Ensure Python dependencies are installed (faster-whisper)
+echo 6. Ensure FFmpeg and Ollama are installed
+echo 7. Verify models/large-v3 directory exists (should be in %RELEASE_DIR%\models\large-v3)
+echo 8. Install Windows service (optional): scripts\install-service.bat
+echo 9. Or run directly from server/: npm start
 echo.
 pause

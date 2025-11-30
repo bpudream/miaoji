@@ -17,15 +17,31 @@ if %errorLevel% neq 0 (
 
 set "SERVICE_NAME=MiaojiBackend"
 
-REM 获取 server 目录（脚本可能在 scripts 子目录中）
+REM 获取 server 目录（脚本可能在 server\scripts 或 release\scripts）
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-if "%SCRIPT_DIR:~-7%"=="\scripts" (
-    set "SERVER_DIR=%SCRIPT_DIR:~0,-7%"
-) else (
-    set "SERVER_DIR=%SCRIPT_DIR%"
+for %%a in ("%SCRIPT_DIR%\..") do set "SCRIPT_PARENT=%%~fa"
+
+set "SERVER_DIR="
+if exist "%SCRIPT_PARENT%\package.json" (
+    set "SERVER_DIR=%SCRIPT_PARENT%"
+) else if exist "%SCRIPT_PARENT%\server\package.json" (
+    set "SERVER_DIR=%SCRIPT_PARENT%\server"
+) else if exist "%SCRIPT_DIR%\server\package.json" (
+    set "SERVER_DIR=%SCRIPT_DIR%\server"
 )
-set "NSSM_PATH=%SERVER_DIR%\tools\nssm.exe"
+
+if not defined SERVER_DIR (
+    echo [ERROR] Unable to locate server directory (package.json not found)
+    pause
+    exit /b 1
+)
+for %%a in ("%SERVER_DIR%\..") do set "SERVER_PARENT=%%~fa"
+set "TOOLS_DIR=%SERVER_DIR%\tools"
+if exist "%SERVER_PARENT%\tools" (
+    set "TOOLS_DIR=%SERVER_PARENT%\tools"
+)
+set "NSSM_PATH=%TOOLS_DIR%\nssm.exe"
 
 echo Checking if service exists...
 sc query "%SERVICE_NAME%" >nul 2>&1
