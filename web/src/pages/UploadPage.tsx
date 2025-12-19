@@ -1,13 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { uploadFile, continueUploadDuplicate, type DuplicateFileInfo } from '../lib/api';
-import { Upload, Loader2, FileAudio, AlertCircle } from 'lucide-react';
+import { Upload, Loader2, FileAudio, AlertCircle, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { DuplicateFileDialog } from '../components/DuplicateFileDialog';
+
+const FILE_SIZE_THRESHOLD = 100 * 1024 * 1024; // 100MB
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+};
 
 export const UploadPage = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadingFile, setUploadingFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [duplicateInfo, setDuplicateInfo] = useState<{
     duplicate: DuplicateFileInfo;
@@ -16,14 +27,40 @@ export const UploadPage = () => {
     mimeType?: string;
     originalFilename?: string;
   } | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
+
+  const handleCancelUpload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsUploading(false);
+    setUploadProgress(null);
+    setUploadingFile(null);
+    setError(null);
+  };
 
   const handleFile = async (file: File, forceUpload = false) => {
     setIsUploading(true);
     setError(null);
     setDuplicateInfo(null);
+    setUploadingFile(file);
+    setUploadProgress(null);
+
+    // 创建新的 AbortController
+    abortControllerRef.current = new AbortController();
+    const showProgress = file.size > FILE_SIZE_THRESHOLD;
+
     try {
-      const res = await uploadFile(file, forceUpload);
+      const res = await uploadFile(
+        file,
+        forceUpload,
+        showProgress ? (progress) => {
+          setUploadProgress(progress);
+        } : undefined,
+        abortControllerRef.current.signal
+      );
 
       if (res.status === 'duplicate' && res.duplicate && res.file_hash && res.temp_file_path) {
         // 检测到重复文件
@@ -42,6 +79,15 @@ export const UploadPage = () => {
         throw new Error('Unexpected response format');
       }
     } catch (err: any) {
+      // 如果是取消操作，不显示错误
+      if (err.name === 'CanceledError' || err.message === 'canceled' || abortControllerRef.current?.signal.aborted) {
+        setIsUploading(false);
+        setUploadProgress(null);
+        setUploadingFile(null);
+        abortControllerRef.current = null;
+        return;
+      }
+
       console.error(err);
 
       // 增强错误信息显示
@@ -59,6 +105,9 @@ export const UploadPage = () => {
 
       setError(errorMessage);
       setIsUploading(false);
+      setUploadProgress(null);
+      setUploadingFile(null);
+      abortControllerRef.current = null;
     }
   };
 
@@ -67,12 +116,18 @@ export const UploadPage = () => {
 
     setIsUploading(true);
     setError(null);
+    setUploadProgress(null);
+
+    // 创建新的 AbortController
+    abortControllerRef.current = new AbortController();
+
     try {
       const res = await continueUploadDuplicate(
         duplicateInfo.tempFilePath,
         duplicateInfo.fileHash,
         duplicateInfo.mimeType,
-        duplicateInfo.originalFilename
+        duplicateInfo.originalFilename,
+        abortControllerRef.current.signal
       );
       if (res.status === 'success' && res.id) {
         // 上传成功，跳转到详情页
@@ -81,17 +136,34 @@ export const UploadPage = () => {
         throw new Error('Continue upload failed');
       }
     } catch (err: any) {
+      // 如果是取消操作，不显示错误
+      if (err.name === 'CanceledError' || err.message === 'canceled' || abortControllerRef.current?.signal.aborted) {
+        setIsUploading(false);
+        setUploadProgress(null);
+        setDuplicateInfo(null);
+        setUploadingFile(null);
+        abortControllerRef.current = null;
+        return;
+      }
+
       console.error(err);
       setError(err.response?.data?.error || '继续上传失败，请重试');
       setIsUploading(false);
+      setUploadProgress(null);
+      abortControllerRef.current = null;
     } finally {
-      setDuplicateInfo(null);
+      if (!abortControllerRef.current?.signal.aborted) {
+        setDuplicateInfo(null);
+        setUploadingFile(null);
+      }
     }
   };
 
   const handleCancelDuplicate = () => {
     setDuplicateInfo(null);
     setIsUploading(false);
+    setUploadProgress(null);
+    setUploadingFile(null);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -123,10 +195,43 @@ export const UploadPage = () => {
         onDrop={onDrop}
       >
         {isUploading ? (
-          <div className="py-8 animate-in fade-in zoom-in duration-300">
+          <div className="py-8 animate-in fade-in zoom-in duration-300 w-full max-w-md mx-auto">
             <Loader2 className="w-16 h-16 text-blue-500 animate-spin mx-auto mb-6" />
-            <p className="text-xl font-medium text-gray-900">正在上传...</p>
-            <p className="text-sm text-gray-500 mt-2">请不要关闭页面，大文件可能需要一些时间</p>
+            <p className="text-xl font-medium text-gray-900 mb-2">正在上传...</p>
+            {uploadProgress !== null && uploadingFile ? (
+              <div className="space-y-3 mt-4">
+                <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                  <div
+                    className="bg-blue-500 h-full transition-all duration-300 ease-out rounded-full"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-sm text-gray-600">
+                  <span>{uploadProgress}%</span>
+                  <span>
+                    {formatFileSize((uploadingFile.size * uploadProgress) / 100)} / {formatFileSize(uploadingFile.size)}
+                  </span>
+                </div>
+                <button
+                  onClick={handleCancelUpload}
+                  className="mt-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors flex items-center gap-2 mx-auto text-sm font-medium"
+                >
+                  <X className="w-4 h-4" />
+                  取消上传
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-500 mt-2">请不要关闭页面，大文件可能需要一些时间</p>
+                <button
+                  onClick={handleCancelUpload}
+                  className="mt-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors flex items-center gap-2 mx-auto text-sm font-medium"
+                >
+                  <X className="w-4 h-4" />
+                  取消上传
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="animate-in fade-in zoom-in duration-300">

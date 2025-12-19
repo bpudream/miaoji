@@ -83,7 +83,12 @@ export interface ProjectsResponse {
   };
 }
 
-export const uploadFile = async (file: File, forceUpload = false): Promise<UploadResponse> => {
+export const uploadFile = async (
+  file: File,
+  forceUpload = false,
+  onProgress?: (progress: number) => void,
+  abortSignal?: AbortSignal
+): Promise<UploadResponse> => {
   const formData = new FormData();
   formData.append('file', file);
   if (forceUpload) {
@@ -94,6 +99,13 @@ export const uploadFile = async (file: File, forceUpload = false): Promise<Uploa
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    signal: abortSignal,
+    onUploadProgress: (progressEvent) => {
+      if (onProgress && progressEvent.total) {
+        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+        onProgress(percentCompleted);
+      }
+    },
   });
   return response.data;
 };
@@ -103,13 +115,16 @@ export const continueUploadDuplicate = async (
   tempFilePath: string,
   fileHash: string,
   mimeType?: string,
-  originalFilename?: string
+  originalFilename?: string,
+  abortSignal?: AbortSignal
 ): Promise<UploadResponse> => {
   const response = await api.post<UploadResponse>('/upload/continue', {
     temp_file_path: tempFilePath,
     file_hash: fileHash,
     mime_type: mimeType,
     original_filename: originalFilename
+  }, {
+    signal: abortSignal
   });
 
   return response.data;
