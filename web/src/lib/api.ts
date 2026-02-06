@@ -39,7 +39,7 @@ export interface Project {
   filename: string;
   original_name: string;
   display_name?: string | null; // 用户自定义的显示名称
-  status: 'pending' | 'extracting' | 'ready_to_transcribe' | 'transcribing' | 'processing' | 'completed' | 'error';
+  status: 'pending' | 'waiting_extract' | 'extracting' | 'ready_to_transcribe' | 'transcribing' | 'processing' | 'completed' | 'cancelled' | 'error';
   created_at: string;
   scenario?: string | null;
   duration?: number; // 音频时长 (秒)
@@ -49,6 +49,8 @@ export interface Project {
   size?: number; // 文件大小（字节）
   summary_count?: number; // 总结数量
   transcription_progress?: number | null; // 转写进度 0–100，仅 status=transcribing 时有值
+  transcription_started_at?: string | null; // 转写开始时间
+  transcription_first_segment_at?: string | null; // 首次输出时间
   transcription?: {
     content: any;
     format: string;
@@ -281,7 +283,13 @@ export interface TranslationResponse {
   id: number;
   transcription_id: number;
   language: string;
-  content: { segments: Array<{ start?: number; end?: number; text: string }> };
+  content: { segments: Array<{ start?: number; end?: number; text: string }> } | null;
+  status?: 'processing' | 'completed' | 'error' | string;
+  progress?: number | null;
+  total_chunks?: number | null;
+  completed_chunks?: number | null;
+  started_at?: string;
+  updated_at?: string;
   created_at: string;
 }
 
@@ -327,6 +335,11 @@ export interface SystemStatus {
   frontendUrl: string | null; // 可能为 null，如果前端没有提供端口信息
   backendUrl: string;
   timestamp: string;
+  localMode?: boolean;
+  localModeAllowedBasePaths?: string[];
+  localModeSource?: 'env' | 'settings';
+  localModeAllowedBasePathsSource?: 'env' | 'settings';
+  uploadMaxSizeBytes?: number;
 }
 
 export interface ConnectionTestResult {
@@ -342,6 +355,34 @@ export const getSystemStatus = async (): Promise<SystemStatus> => {
   const response = await api.get<SystemStatus>('/system/status', {
     headers: frontendPort ? { 'x-frontend-port': String(frontendPort) } : {},
   });
+  return response.data;
+};
+
+export interface LocalModeSettings {
+  localMode: boolean;
+  allowedBasePaths: string[];
+  localModeSource: 'env' | 'settings';
+  allowedBasePathsSource: 'env' | 'settings';
+}
+
+export const getLocalModeSettings = async (): Promise<LocalModeSettings> => {
+  const response = await api.get<LocalModeSettings>('/settings/local-mode');
+  return response.data;
+};
+
+export const updateLocalModeSettings = async (payload: {
+  localMode?: boolean;
+  allowedBasePaths?: string[];
+}): Promise<LocalModeSettings> => {
+  const response = await api.put<LocalModeSettings>('/settings/local-mode', payload);
+  return response.data;
+};
+export const addProjectFromLocalPath = async (payload: {
+  path: string;
+  display_name?: string;
+  force_upload?: boolean;
+}): Promise<UploadResponse> => {
+  const response = await api.post<UploadResponse>('/projects/from-local-path', payload);
   return response.data;
 };
 
@@ -405,6 +446,9 @@ export interface LLMSettings {
   provider: LLMProviderType;
   base_url?: string;
   model_name?: string;
+  translation_chunk_tokens?: number;
+  translation_overlap_tokens?: number;
+  translation_context_tokens?: number;
   api_key_set?: boolean;
 }
 
@@ -417,6 +461,9 @@ export const updateLLMSettings = async (data: {
   provider: LLMProviderType;
   base_url?: string;
   model_name?: string;
+  translation_chunk_tokens?: number;
+  translation_overlap_tokens?: number;
+  translation_context_tokens?: number;
   api_key?: string;
 }): Promise<{ status: string; config: LLMSettings }> => {
   const response = await api.post<{ status: string; config: LLMSettings }>('/settings/llm', data);

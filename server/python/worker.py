@@ -25,7 +25,14 @@ def create_model():
     sys.stderr.write(f"[Worker] Using device={device}, compute_type={compute_type}\n")
     return WhisperModel(MODEL_PATH, device=device, compute_type=compute_type)
 
-def transcribe_with_model(model: WhisperModel, file_path: str, total_duration: float = 0, on_progress=None, options=None):
+def transcribe_with_model(
+    model: WhisperModel,
+    file_path: str,
+    total_duration: float = 0,
+    on_progress=None,
+    on_segment=None,
+    options=None
+):
     """total_duration: 音频总时长(秒)，用于计算进度。on_progress(req_id, progress_pct) 每段后可选调用。"""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -35,15 +42,41 @@ def transcribe_with_model(model: WhisperModel, file_path: str, total_duration: f
     transcribe_kwargs = {
         "beam_size": 5,
         "language": opts.get("language"),
+        # --- 🛡️ VAD 最终定版 (0.15 / 300 / 200) ---
         "vad_filter": True,
         "vad_parameters": {
-            "min_silence_duration_ms": 200,
-            "speech_pad_ms": 80
+            # 【核心】0.15：比默认敏锐，能穿透进球欢呼抓取人声，
+            # 但又不会像 0.1 那样被噪音“粘住”导致切不开。
+            "threshold": 0.15,
+
+            # 【快刀】300ms：专为激情解说设计，抓住每一次换气间隙切断。
+            "min_silence_duration_ms": 300,
+
+            # 【胶水】200ms：保护首尾音，防止切分太快吞字。
+            "speech_pad_ms": 200
         },
-        "word_timestamps": True,
+        # "word_timestamps": True,
         "task": opts.get("task", "transcribe"),
         "initial_prompt": opts.get("initial_prompt") or "",
-        "condition_on_previous_text": True if condition_on_previous_text is None else condition_on_previous_text
+
+        # "condition_on_previous_text": True if condition_on_previous_text is None else condition_on_previous_text
+
+        # 【修改】体育场景强制设为 False
+        "condition_on_previous_text": False,
+
+        # --- 2. 阈值全关 (解决丢失几十秒的核心) ---
+
+        # [关键修改] 设为 None。
+        # 告诉模型：哪怕你觉得这是纯噪音 (Probability 99.9%)，也得给我编个字出来！
+        # 只有这样才能填补那个 30秒的坑。
+        "no_speech_threshold": None,
+
+        # [关键修改] 设为 None。
+        # 告诉模型：哪怕你卡住了，复读了 100 遍 "Goal"，也别删掉，原样输出。
+        # 我们宁要复读机，不要时间空洞。
+        "compression_ratio_threshold": None,
+
+        "log_prob_threshold": None, # 保持关闭
     }
     if opts.get("compression_ratio_threshold") is not None:
         transcribe_kwargs["compression_ratio_threshold"] = opts.get("compression_ratio_threshold")
@@ -58,12 +91,16 @@ def transcribe_with_model(model: WhisperModel, file_path: str, total_duration: f
     last_pct = -1
 
     for segment in segments:
-        result_segments.append({
+        seg_data = {
             "start": segment.start,
             "end": segment.end,
             "text": segment.text
-        })
+        }
+        result_segments.append(seg_data)
         full_text += segment.text
+
+        if on_segment:
+            on_segment(seg_data)
 
         if on_progress and total_duration > 0:
             pct = min(100.0, round((segment.end / total_duration) * 100, 1))
@@ -120,10 +157,15 @@ def run_server():
                 msg = {"type": "progress", "id": req_id, "progress_pct": pct}
                 print(json.dumps(msg, ensure_ascii=False), flush=True)
 
+            def send_segment(seg):
+                msg = {"type": "segment", "id": req_id, "data": seg}
+                print(json.dumps(msg, ensure_ascii=False), flush=True)
+
             result = transcribe_with_model(
                 model, audio_file,
                 total_duration=total_duration,
                 on_progress=send_progress if total_duration > 0 else None,
+                on_segment=send_segment,
                 options={
                     "initial_prompt": payload.get("initial_prompt", ""),
                     "task": payload.get("task", "transcribe"),

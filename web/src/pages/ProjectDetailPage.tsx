@@ -8,6 +8,7 @@ import { TranscriptionPanel } from '../components/TranscriptionResult';
 import { MediaPlayerPanel, MediaPlayerRef } from '../components/MediaPlayer';
 import { updateProjectName } from '../lib/api';
 import { getProjectStatusText } from '../lib/status';
+import type { SubtitleOverlayData } from '../components/transcription/types';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -36,11 +37,11 @@ export const ProjectDetailPage = () => {
     if (!project) return 5000;
 
     const status = project.status;
-    if (status === 'completed' || status === 'error') return 0;
+    if (status === 'completed' || status === 'error' || status === 'cancelled') return 0;
 
     // 非关键状态降低频率，避免不必要的请求
     if (status === 'pending' || status === 'ready_to_transcribe') return 8000;
-    if (status === 'extracting' || status === 'processing') return 3000;
+    if (status === 'waiting_extract' || status === 'extracting' || status === 'processing') return 3000;
 
     // 转写状态：根据时长动态调整
     if (status !== 'transcribing' ||
@@ -133,7 +134,7 @@ export const ProjectDetailPage = () => {
     // 防止 store 中残留的旧项目状态（如上一个已完成的项目）误触发停止逻辑
     if (currentProject && String(currentProject.id) === id) {
       const status = currentProject.status;
-      if (status === 'completed' || status === 'error') {
+      if (status === 'completed' || status === 'error' || status === 'cancelled') {
         console.log(`[Poll] Task finished with status: ${status}, stopping polling`);
         isPollingRef.current = false;
         if (timerRef.current) {
@@ -149,7 +150,7 @@ export const ProjectDetailPage = () => {
     if (!hasInitializedPollingRef.current) return;
     if (!currentProject || String(currentProject.id) !== id) return;
     const status = currentProject.status;
-    const isFinal = status === 'completed' || status === 'error';
+    const isFinal = status === 'completed' || status === 'error' || status === 'cancelled';
     if (!isFinal && !isPollingRef.current) {
       setPollingEpoch((v) => v + 1);
     }
@@ -167,6 +168,11 @@ export const ProjectDetailPage = () => {
   const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
   const playerRef = useRef<MediaPlayerRef>(null);
   const [currentPlayTime, setCurrentPlayTime] = useState(0);
+  const [subtitleOverlayData, setSubtitleOverlayData] = useState<SubtitleOverlayData>({
+    viewMode: 'original',
+    originalSegments: [],
+    translatedSegments: [],
+  });
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedDisplayName, setEditedDisplayName] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -179,10 +185,12 @@ export const ProjectDetailPage = () => {
   const statusColor = {
     completed: 'text-green-600 bg-green-50 border-green-200',
     processing: 'text-blue-600 bg-blue-50 border-blue-200',
+    waiting_extract: 'text-indigo-600 bg-indigo-50 border-indigo-200',
     extracting: 'text-indigo-600 bg-indigo-50 border-indigo-200',
     transcribing: 'text-blue-600 bg-blue-50 border-blue-200',
     ready_to_transcribe: 'text-blue-600 bg-blue-50 border-blue-200',
     pending: 'text-gray-600 bg-gray-50 border-gray-200',
+    cancelled: 'text-gray-500 bg-gray-100 border-gray-200',
     error: 'text-red-600 bg-red-50 border-red-200',
   }[currentProject.status] || 'text-gray-600 bg-gray-50 border-gray-200';
 
@@ -309,7 +317,7 @@ export const ProjectDetailPage = () => {
                   {new Date(currentProject.created_at).toLocaleString()}
                 </span>
                 <span className={clsx("px-2.5 py-0.5 rounded-full text-xs font-medium border flex items-center gap-1", statusColor)}>
-                  {['processing', 'extracting', 'transcribing', 'ready_to_transcribe'].includes(currentProject.status) && (
+                  {['processing', 'waiting_extract', 'extracting', 'transcribing', 'ready_to_transcribe'].includes(currentProject.status) && (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   )}
                   {getProjectStatusText(currentProject.status, 'short')}
@@ -333,6 +341,7 @@ export const ProjectDetailPage = () => {
               onModeChange={setPlayerMode}
               playerRef={playerRef}
               onTimeUpdate={setCurrentPlayTime}
+              subtitleOverlayData={subtitleOverlayData}
             />
             <div
               className={clsx(
@@ -380,6 +389,7 @@ export const ProjectDetailPage = () => {
             project={currentProject}
             playerRef={playerRef}
             currentPlayTime={currentPlayTime}
+            onOverlayDataChange={setSubtitleOverlayData}
             className="h-full"
           />
         </div>

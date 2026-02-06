@@ -27,6 +27,9 @@ export const LLMConfigCard = () => {
   const [baseUrl, setBaseUrl] = useState('');
   const [modelName, setModelName] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [translationChunkTokens, setTranslationChunkTokens] = useState('');
+  const [translationOverlapTokens, setTranslationOverlapTokens] = useState('');
+  const [translationContextTokens, setTranslationContextTokens] = useState('');
 
   useEffect(() => {
     loadConfig();
@@ -41,6 +44,15 @@ export const LLMConfigCard = () => {
       setProvider(data.provider);
       setBaseUrl(data.base_url ?? '');
       setModelName(data.model_name ?? '');
+      setTranslationChunkTokens(
+        data.translation_chunk_tokens != null ? String(data.translation_chunk_tokens) : ''
+      );
+      setTranslationOverlapTokens(
+        data.translation_overlap_tokens != null ? String(data.translation_overlap_tokens) : ''
+      );
+      setTranslationContextTokens(
+        data.translation_context_tokens != null ? String(data.translation_context_tokens) : ''
+      );
       setApiKeyInput(''); // 不回显 API Key，仅占位
     } catch (e: any) {
       setError(e?.response?.data?.error || '加载配置失败');
@@ -60,6 +72,12 @@ export const LLMConfigCard = () => {
         base_url: baseUrl.trim() || undefined,
         model_name: modelName.trim() || undefined,
       };
+      const chunkTokens = parseInt(translationChunkTokens, 10);
+      if (!Number.isNaN(chunkTokens)) payload.translation_chunk_tokens = chunkTokens;
+      const overlapTokens = parseInt(translationOverlapTokens, 10);
+      if (!Number.isNaN(overlapTokens)) payload.translation_overlap_tokens = overlapTokens;
+      const contextTokens = parseInt(translationContextTokens, 10);
+      if (!Number.isNaN(contextTokens)) payload.translation_context_tokens = contextTokens;
       if (provider === 'openai' && apiKeyInput.trim()) {
         payload.api_key = apiKeyInput.trim();
       }
@@ -85,6 +103,12 @@ export const LLMConfigCard = () => {
         base_url: baseUrl.trim() || undefined,
         model_name: modelName.trim() || undefined,
       };
+      const chunkTokens = parseInt(translationChunkTokens, 10);
+      if (!Number.isNaN(chunkTokens)) payload.translation_chunk_tokens = chunkTokens;
+      const overlapTokens = parseInt(translationOverlapTokens, 10);
+      if (!Number.isNaN(overlapTokens)) payload.translation_overlap_tokens = overlapTokens;
+      const contextTokens = parseInt(translationContextTokens, 10);
+      if (!Number.isNaN(contextTokens)) payload.translation_context_tokens = contextTokens;
       if (provider === 'openai' && apiKeyInput.trim()) payload.api_key = apiKeyInput.trim();
       await updateLLMSettings(payload);
       const result = await testLLMConnection();
@@ -194,6 +218,48 @@ export const LLMConfigCard = () => {
           />
           <p className="mt-1 text-xs text-gray-500">
             当前将使用：{displayModel || defaultModel}
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <div className="mb-2 text-sm font-medium text-gray-700">翻译分块参数（可选）</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Chunk Tokens</label>
+              <input
+                type="number"
+                min={100}
+                value={translationChunkTokens}
+                onChange={(e) => setTranslationChunkTokens(e.target.value)}
+                placeholder="例如 1200"
+                className="w-full rounded-md border border-gray-200 px-2.5 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Overlap Tokens</label>
+              <input
+                type="number"
+                min={0}
+                value={translationOverlapTokens}
+                onChange={(e) => setTranslationOverlapTokens(e.target.value)}
+                placeholder="例如 200"
+                className="w-full rounded-md border border-gray-200 px-2.5 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Context Tokens</label>
+              <input
+                type="number"
+                min={512}
+                value={translationContextTokens}
+                onChange={(e) => setTranslationContextTokens(e.target.value)}
+                placeholder="例如 4096"
+                className="w-full rounded-md border border-gray-200 px-2.5 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            留空将使用默认值；本地 14B 建议更小的 chunk 和 overlap。
           </p>
         </div>
       </div>

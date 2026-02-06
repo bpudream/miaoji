@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { SummaryPanel } from '../../components/SummaryPanel';
 import { TranscriptionPanel } from '../../components/TranscriptionResult';
 import { MediaPlayer, MediaPlayerRef } from '../../components/MediaPlayer';
+import type { SubtitleOverlayData } from '../../components/transcription/types';
 
 export const MobileProjectDetailPage = () => {
     const { id } = useParams<{ id: string }>();
@@ -70,7 +71,7 @@ export const MobileProjectDetailPage = () => {
     useEffect(() => {
         if (currentProject && String(currentProject.id) === id) {
             const status = currentProject.status;
-            if (status === 'completed' || status === 'error') {
+            if (status === 'completed' || status === 'error' || status === 'cancelled') {
                 isPollingRef.current = false;
                 if (timerRef.current) clearTimeout(timerRef.current);
             }
@@ -86,6 +87,11 @@ export const MobileProjectDetailPage = () => {
     const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
     const playerRef = useRef<MediaPlayerRef>(null);
     const [currentPlayTime, setCurrentPlayTime] = useState(0);
+    const [subtitleOverlayData, setSubtitleOverlayData] = useState<SubtitleOverlayData>({
+        viewMode: 'original',
+        originalSegments: [],
+        translatedSegments: [],
+    });
 
     if (isLoading && !currentProject) return <div className="p-8 text-center text-sm">加载中...</div>;
     if (error) return <div className="p-8 text-center text-red-500 text-sm">{error}</div>;
@@ -121,6 +127,7 @@ export const MobileProjectDetailPage = () => {
                         hasAudioPath={!!currentProject.audio_path}
                         playerMode={playerMode}
                         onTimeUpdate={setCurrentPlayTime}
+                        subtitleOverlayData={subtitleOverlayData}
                         className="flex-1 min-h-0"
                     />
                  </div>
@@ -154,6 +161,7 @@ export const MobileProjectDetailPage = () => {
                         project={currentProject}
                         playerRef={playerRef}
                         currentPlayTime={currentPlayTime}
+                        onOverlayDataChange={setSubtitleOverlayData}
                         className="h-full border-none shadow-none rounded-none"
                       />
                  </div>

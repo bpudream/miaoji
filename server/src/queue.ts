@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import readline from 'node:readline';
 import db from './db';
 import { AudioExtractor } from './services/audio';
 import { ProjectPathService } from './services/projectPath';
+import { StorageService } from './services/storage';
 import path from 'node:path';
 import fs from 'node:fs';
 import { getPythonWorkerPath, getPythonPath } from './utils/paths';
@@ -14,7 +16,7 @@ import {
   type ScenarioKey
 } from './services/whisperPrompt';
 
-type TaskType = 'transcribe' | 'burn_subtitle' | 'translate';
+type TaskType = 'extract' | 'transcribe' | 'burn_subtitle' | 'translate';
 
 interface TranscribePayload {
   id: string;
@@ -22,6 +24,7 @@ interface TranscribePayload {
 }
 
 type TaskPayloadMap = {
+  extract: { id: string; filepath: string };
   transcribe: TranscribePayload;
   burn_subtitle: { id: string };
   translate: { id: string; target_language?: string };
@@ -38,6 +41,8 @@ interface UpdateStatusExtra {
   failed_stage?: string;
   duration?: number;
   transcription_progress?: number | null;
+  transcription_started_at?: string | null;
+  transcription_first_segment_at?: string | null;
 }
 
 interface WorkerOptions {
@@ -48,11 +53,26 @@ interface WorkerOptions {
   compression_ratio_threshold?: number;
 }
 
+interface TranscriptionSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 class QueueService {
   private queue: Task[] = [];
   private isProcessing = false;
   private pythonWorker: ChildProcessWithoutNullStreams | null = null;
-  private pythonWorkerBuffer = '';
+  private currentTaskId: string | null = null;
+  private currentExtractionAbort: AbortController | null = null;
+  private cancelledTaskIds = new Set<string>();
+  private currentTranscriptionId: string | null = null;
+  private currentSegments: TranscriptionSegment[] = [];
+  private segmentBufferedCount = 0;
+  private segmentFlushLastTs = 0;
+  private transcriptionStartedAtMs: number | null = null;
+  private firstSegmentAtMs: number | null = null;
+  private pythonWorkerReadline: readline.Interface | null = null;
   private pendingWorkerRequest: {
     resolve: (value: any) => void;
     reject: (reason?: any) => void;
@@ -65,6 +85,7 @@ class QueueService {
   private handlers: Partial<{ [K in TaskType]: (payload: TaskPayloadMap[K]) => Promise<void> }> = {};
 
   constructor() {
+    this.registerHandler('extract', this.handleExtract.bind(this));
     this.registerHandler('transcribe', this.handleTranscribe.bind(this));
     this.registerHandler('translate', this.handleTranslate.bind(this));
   }
@@ -76,6 +97,45 @@ class QueueService {
     logger.info({ type, payload }, 'Task added to queue');
     this.queue.push({ type, payload });
     this.processNext();
+  }
+
+  cancelByProjectId(id: string) {
+    const before = this.queue.length;
+    this.queue = this.queue.filter((task) => (task.payload as any).id !== id);
+    const removed = before - this.queue.length;
+    this.cancelledTaskIds.add(id);
+
+    try {
+      this.updateStatus(id, 'cancelled', {
+        error_message: '任务已取消',
+        failed_stage: 'cancelled',
+        transcription_progress: null
+      });
+    } catch (_e) {
+      // ignore db errors for cancelled tasks
+    }
+
+    if (this.currentTaskId === id) {
+      if (this.currentExtractionAbort) {
+        this.currentExtractionAbort.abort();
+      }
+      if (this.pendingWorkerRequest?.taskId === id) {
+        this.pendingWorkerRequest.reject(new Error('Task cancelled'));
+        this.pendingWorkerRequest = null;
+      }
+      if (this.currentTranscriptionId === id) {
+        this.currentTranscriptionId = null;
+        this.currentSegments = [];
+        this.segmentBufferedCount = 0;
+        this.segmentFlushLastTs = 0;
+      }
+      if (this.pythonWorker) {
+        this.pythonWorker.kill('SIGTERM');
+        this.pythonWorker = null;
+      }
+    }
+
+    return { removed };
   }
 
   registerHandler<T extends TaskType>(type: T, handler: (payload: TaskPayloadMap[T]) => Promise<void>) {
@@ -109,6 +169,14 @@ class QueueService {
       updates.push('transcription_progress = ?');
       params.push(extra.transcription_progress);
     }
+    if (extra.transcription_started_at !== undefined) {
+      updates.push('transcription_started_at = ?');
+      params.push(extra.transcription_started_at);
+    }
+    if (extra.transcription_first_segment_at !== undefined) {
+      updates.push('transcription_first_segment_at = ?');
+      params.push(extra.transcription_first_segment_at);
+    }
 
     params.push(id);
     const sql = `UPDATE media_files SET ${updates.join(', ')} WHERE id = ?`;
@@ -134,10 +202,12 @@ class QueueService {
       return;
     }
 
+    this.currentTaskId = (task.payload as any).id ?? null;
     const handler = this.handlers[task.type];
     if (!handler) {
       logger.error({ type: task.type }, 'No handler registered for task type');
       this.isProcessing = false;
+      this.currentTaskId = null;
       this.processNext();
       return;
     }
@@ -150,6 +220,7 @@ class QueueService {
       logger.error({ type: task.type, err: error }, 'Task handler failed');
     } finally {
       this.isProcessing = false;
+      this.currentTaskId = null;
       this.processNext();
     }
   }
@@ -160,6 +231,12 @@ class QueueService {
     let currentStage = 'pending';
     let audioPath: string | null = null;
     let duration = 0;
+    const isCancelled = () => this.cancelledTaskIds.has(taskId);
+
+    if (isCancelled()) {
+      this.updateStatus(taskId, 'cancelled', { error_message: '任务已取消', failed_stage: 'cancelled' });
+      return;
+    }
     const fileInfo = db
       .prepare(
         'SELECT scenario, transcribe_meta, original_name, display_name FROM media_files WHERE id = ?'
@@ -224,12 +301,12 @@ class QueueService {
           : undefined;
 
       if (teamHomeName || teamAwayName || roster_combined || keywords) {
-        buildPromptMeta = {
-          team_home_name: teamHomeName,
-          team_away_name: teamAwayName,
-          roster_combined,
-          keywords
-        };
+        const meta: { team_home_name?: string; team_away_name?: string; roster_combined?: string; keywords?: string } = {};
+        if (teamHomeName) meta.team_home_name = teamHomeName;
+        if (teamAwayName) meta.team_away_name = teamAwayName;
+        if (roster_combined) meta.roster_combined = roster_combined;
+        if (keywords) meta.keywords = keywords;
+        buildPromptMeta = meta;
       }
     } catch (_e) {
       // ignore parse error, proceed without meta
@@ -238,90 +315,89 @@ class QueueService {
     const initial_prompt = buildPrompt(filename, scenarioKey, buildPromptMeta);
 
     try {
-      // 1. Extracting
-      currentStage = 'extracting';
-      this.updateStatus(taskId, 'extracting');
+      const audioRow = db.prepare('SELECT audio_path, duration FROM media_files WHERE id = ?').get(taskId) as
+        | { audio_path?: string | null; duration?: number | null }
+        | undefined;
+      audioPath = audioRow?.audio_path ?? null;
+      duration = audioRow?.duration ?? 0;
 
-      // 提取音频 (转为 16kHz WAV) 并获取时长
-      // 音频会先提取到原始文件所在目录
-      const extracted = await AudioExtractor.extract(filepath);
-      let tempAudioPath = extracted.path;
-      duration = extracted.duration;
-
-      // 使用统一的路径服务获取项目ID和最终音频路径
-      const projectId = taskId;
-      const basePath = ProjectPathService.parseBasePathFromPath(filepath);
-
-      if (!basePath) {
-        throw new Error(`无法从文件路径解析存储基础路径: ${filepath}`);
+      if (!audioPath || !fs.existsSync(audioPath)) {
+        throw new Error('音频尚未提取，无法开始转写');
       }
 
-      const finalAudioPath = ProjectPathService.getAudioFilePath(basePath, projectId);
-
-      // 如果音频文件不在项目目录，或者文件名不是 audio.wav，则移动并重命名
-      if (tempAudioPath !== finalAudioPath) {
-        try {
-          if (fs.existsSync(tempAudioPath)) {
-            // 如果目标文件已存在，先删除
-            if (fs.existsSync(finalAudioPath)) {
-              fs.unlinkSync(finalAudioPath);
-            }
-            // 移动并重命名
-            fs.renameSync(tempAudioPath, finalAudioPath);
-            logger.info({ taskId, audioPath: finalAudioPath }, 'Audio moved to project directory');
-          }
-        } catch (moveErr: any) {
-          // 如果移动失败，尝试复制后删除
-          logger.warn({ taskId, err: moveErr }, 'Failed to move audio file, trying copy');
-          if (fs.existsSync(tempAudioPath)) {
-            fs.copyFileSync(tempAudioPath, finalAudioPath);
-            fs.unlinkSync(tempAudioPath);
-          }
-        }
-      }
-
-      audioPath = finalAudioPath;
-
-      logger.info({ taskId, audioPath, duration: duration.toFixed(2) }, 'Audio extracted');
-      try {
-        const stats = fs.statSync(audioPath);
-        logger.debug({ taskId, size: stats.size, modified: stats.mtime.toISOString() }, 'Audio file stats');
-      } catch (statErr) {
-        logger.warn({ taskId, audioPath, err: statErr }, 'Failed to stat audio file');
-      }
-
-      // 2. Transcribing
+      // 1. Transcribing
       currentStage = 'transcribing';
+      const startedAt = new Date().toISOString();
       this.updateStatus(taskId, 'transcribing', {
         audio_path: audioPath,
-        duration: duration
+        duration: duration,
+        transcription_started_at: startedAt,
+        transcription_first_segment_at: null
       });
       logger.debug({ taskId }, "Status updated to 'transcribing'");
       if (initial_prompt) {
         logger.debug({ taskId, initial_prompt }, 'Transcribe initial_prompt');
       }
 
+      // 清空旧转写并初始化空记录，确保流式可读
+      try {
+        db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(taskId);
+      } catch (_e) {
+        // ignore
+      }
+      const emptyContent = JSON.stringify({ segments: [] as TranscriptionSegment[], text: '' });
+      db.prepare('INSERT INTO transcriptions (media_file_id, content, format) VALUES (?, ?, ?)').run(
+        taskId,
+        emptyContent,
+        'json'
+      );
+      this.currentTranscriptionId = taskId;
+      this.currentSegments = [];
+      this.segmentBufferedCount = 0;
+      this.segmentFlushLastTs = 0;
+      this.transcriptionStartedAtMs = Date.now();
+      this.firstSegmentAtMs = null;
+
       // 调用 Python Worker（传入 duration 与动态 initial_prompt）
-      const result = await this.runPythonWorker(audioPath, duration, taskId, {
-        task: 'transcribe',
-        initial_prompt: initial_prompt || undefined,
-        condition_on_previous_text: promptConfig.conditionOnPreviousText,
-        compression_ratio_threshold: promptConfig.compressionRatioThreshold
-      });
+      const workerOptions: WorkerOptions = { task: 'transcribe' };
+      if (initial_prompt) workerOptions.initial_prompt = initial_prompt;
+      if (promptConfig.conditionOnPreviousText !== undefined) {
+        workerOptions.condition_on_previous_text = promptConfig.conditionOnPreviousText;
+      }
+      if (promptConfig.compressionRatioThreshold !== undefined) {
+        workerOptions.compression_ratio_threshold = promptConfig.compressionRatioThreshold;
+      }
 
-      // 3. Saving Result
-      const insertStmt = db.prepare(`
-        INSERT INTO transcriptions (media_file_id, content, format)
-        VALUES (?, ?, 'json')
-      `);
-      insertStmt.run(taskId, JSON.stringify(result));
+      const result = await this.runPythonWorker(audioPath, duration, taskId, workerOptions);
 
-      // 4. Completed（清除进度字段）
+      if (isCancelled()) {
+        throw new Error('Task cancelled');
+      }
+
+      // 2. Saving Result
+      this.flushSegmentBuffer(true);
+      db.prepare('UPDATE transcriptions SET content = ?, format = ? WHERE media_file_id = ?').run(
+        JSON.stringify(result),
+        'json',
+        taskId
+      );
+
+      // 3. Completed（清除进度字段）
       currentStage = 'completed';
       this.updateStatus(taskId, 'completed', { transcription_progress: null });
       logger.info({ taskId }, 'Task completed successfully');
 
     } catch (error: any) {
+      if (error?.message === 'Task cancelled' || error?.message === 'Extraction cancelled') {
+        logger.warn({ taskId, stage: currentStage }, 'Task cancelled');
+        this.updateStatus(taskId, 'cancelled', {
+          error_message: '任务已取消',
+          failed_stage: 'cancelled',
+          transcription_progress: null
+        });
+        return;
+      }
+
       logger.error({ taskId, stage: currentStage, err: error }, 'Task failed');
 
       if (audioPath && fs.existsSync(audioPath)) {
@@ -342,6 +418,13 @@ class QueueService {
         failed_stage: currentStage,
         transcription_progress: null
       });
+    } finally {
+      this.currentTranscriptionId = null;
+      this.currentSegments = [];
+      this.segmentBufferedCount = 0;
+      this.segmentFlushLastTs = 0;
+      this.transcriptionStartedAtMs = null;
+      this.firstSegmentAtMs = null;
     }
   }
 
@@ -366,7 +449,100 @@ class QueueService {
   }
 
   private async handleTranslate(payload: { id: string; target_language?: string }) {
+    if (this.cancelledTaskIds.has(payload.id)) {
+      return;
+    }
     await runTranslation(payload.id, payload.target_language ?? 'en');
+  }
+
+  private async handleExtract(payload: { id: string; filepath: string }) {
+    const taskId = payload.id;
+    const filepath = payload.filepath;
+    let currentStage = 'waiting_extract';
+    const isCancelled = () => this.cancelledTaskIds.has(taskId);
+
+    if (isCancelled()) {
+      this.updateStatus(taskId, 'cancelled', { error_message: '任务已取消', failed_stage: 'cancelled' });
+      return;
+    }
+
+    try {
+      const audioRow = db.prepare('SELECT audio_path FROM media_files WHERE id = ?').get(taskId) as
+        | { audio_path?: string | null }
+        | undefined;
+      if (audioRow?.audio_path && fs.existsSync(audioRow.audio_path)) {
+        this.updateStatus(taskId, 'ready_to_transcribe');
+        return;
+      }
+
+      currentStage = 'extracting';
+      this.updateStatus(taskId, 'extracting');
+
+      const projectId = taskId;
+      const isProjectPath = ProjectPathService.isProjectPath(filepath);
+      const basePath = isProjectPath
+        ? ProjectPathService.parseBasePathFromPath(filepath)
+        : StorageService.getBestStoragePath();
+
+      if (!basePath) {
+        throw new Error(`无法从文件路径解析存储基础路径: ${filepath}`);
+      }
+
+      const projectDir = ProjectPathService.ensureProjectDir(basePath, projectId);
+      const finalAudioPath = ProjectPathService.getAudioFilePath(basePath, projectId);
+
+      this.currentExtractionAbort = new AbortController();
+      const extracted = await AudioExtractor.extract(filepath, projectDir, this.currentExtractionAbort.signal);
+      this.currentExtractionAbort = null;
+      let tempAudioPath = extracted.path;
+      const duration = extracted.duration;
+
+      if (isCancelled()) {
+        throw new Error('Task cancelled');
+      }
+
+      if (tempAudioPath !== finalAudioPath) {
+        try {
+          if (fs.existsSync(tempAudioPath)) {
+            if (fs.existsSync(finalAudioPath)) {
+              fs.unlinkSync(finalAudioPath);
+            }
+            fs.renameSync(tempAudioPath, finalAudioPath);
+            logger.info({ taskId, audioPath: finalAudioPath }, 'Audio moved to project directory');
+          }
+        } catch (moveErr: any) {
+          logger.warn({ taskId, err: moveErr }, 'Failed to move audio file, trying copy');
+          if (fs.existsSync(tempAudioPath)) {
+            fs.copyFileSync(tempAudioPath, finalAudioPath);
+            fs.unlinkSync(tempAudioPath);
+          }
+        }
+      }
+
+      this.updateStatus(taskId, 'ready_to_transcribe', {
+        audio_path: finalAudioPath,
+        duration: duration,
+        transcription_progress: null
+      });
+    } catch (error: any) {
+      this.currentExtractionAbort = null;
+      if (error?.message === 'Task cancelled' || error?.message === 'Extraction cancelled') {
+        logger.warn({ taskId, stage: currentStage }, 'Task cancelled');
+        this.updateStatus(taskId, 'cancelled', {
+          error_message: '任务已取消',
+          failed_stage: 'cancelled',
+          transcription_progress: null
+        });
+        return;
+      }
+
+      logger.error({ taskId, stage: currentStage, err: error }, 'Extract task failed');
+      this.updateStatus(taskId, 'error', {
+        error_message: error.message,
+        failed_stage: currentStage,
+        transcription_progress: null
+      });
+    }
   }
 
   /**
@@ -382,22 +558,29 @@ class QueueService {
     this.pythonWorker = spawn(pythonPath, [workerScript, '--server']);
     this.pythonWorker.stdout.setEncoding('utf-8');
     this.pythonWorker.stderr.setEncoding('utf-8');
-    this.pythonWorkerBuffer = '';
 
-    this.pythonWorker.stdout.on('data', (data) => {
-      this.pythonWorkerBuffer += data;
-      const lines = this.pythonWorkerBuffer.split('\n');
-      this.pythonWorkerBuffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed) {
-          this.handleWorkerMessage(trimmed);
-        }
+    this.pythonWorkerReadline = readline.createInterface({
+      input: this.pythonWorker.stdout,
+      crlfDelay: Infinity
+    });
+    this.pythonWorkerReadline.on('line', (line) => {
+      const trimmed = line.trim();
+      if (trimmed) {
+        this.handleWorkerMessage(trimmed);
       }
     });
 
     this.pythonWorker.stderr.on('data', (data) => {
-      logger.error({ stderr: data.toString().trim() }, 'Worker stderr');
+      const text = data.toString().trim();
+      if (!text) return;
+      const level = /error|exception|traceback|failed/i.test(text) ? 'error' : /warn|deprecated/i.test(text) ? 'warn' : 'info';
+      if (level === 'error') {
+        logger.error({ stderr: text }, 'Worker stderr');
+      } else if (level === 'warn') {
+        logger.warn({ stderr: text }, 'Worker stderr');
+      } else {
+        logger.info({ stderr: text }, 'Worker stderr');
+      }
     });
 
     this.pythonWorker.on('close', (code) => {
@@ -405,6 +588,10 @@ class QueueService {
       if (this.pendingWorkerRequest) {
         this.pendingWorkerRequest.reject(new Error(`Worker exited with code ${code}`));
         this.pendingWorkerRequest = null;
+      }
+      if (this.pythonWorkerReadline) {
+        this.pythonWorkerReadline.close();
+        this.pythonWorkerReadline = null;
       }
       this.pythonWorker = null;
     });
@@ -416,6 +603,32 @@ class QueueService {
         this.pendingWorkerRequest = null;
       }
     });
+  }
+
+  private flushSegmentBuffer(force = false) {
+    if (!this.currentTranscriptionId) return;
+    if (this.currentSegments.length === 0) return;
+    const now = Date.now();
+    if (!force) {
+      const timeOk = now - this.segmentFlushLastTs >= 2000;
+      const countOk = this.segmentBufferedCount >= 5;
+      if (!timeOk && !countOk) return;
+    }
+    const content = {
+      segments: this.currentSegments,
+      text: this.currentSegments.map((s) => s.text).join('')
+    };
+    try {
+      db.prepare('UPDATE transcriptions SET content = ?, format = ? WHERE media_file_id = ?').run(
+        JSON.stringify(content),
+        'json',
+        this.currentTranscriptionId
+      );
+      this.segmentBufferedCount = 0;
+      this.segmentFlushLastTs = now;
+    } catch (e) {
+      logger.warn({ taskId: this.currentTranscriptionId, err: e }, 'Failed to flush transcription segments');
+    }
   }
 
   /**
@@ -479,6 +692,39 @@ class QueueService {
     if (message.type === 'progress') {
       if (this.pendingWorkerRequest && message.progress_pct != null) {
         this.updateTranscriptionProgressThrottled(this.pendingWorkerRequest.taskId, Number(message.progress_pct));
+      }
+      return;
+    }
+
+    if (message.type === 'segment') {
+      if (!this.pendingWorkerRequest || !this.currentTranscriptionId) {
+        return;
+      }
+      const data = message.data;
+      if (
+        data &&
+        typeof data.start === 'number' &&
+        typeof data.end === 'number' &&
+        typeof data.text === 'string'
+      ) {
+        this.currentSegments.push({
+          start: data.start,
+          end: data.end,
+          text: data.text
+        });
+        this.segmentBufferedCount += 1;
+        if (!this.firstSegmentAtMs) {
+          this.firstSegmentAtMs = Date.now();
+          const firstSegmentAt = new Date(this.firstSegmentAtMs).toISOString();
+          this.updateStatus(this.currentTranscriptionId, 'transcribing', {
+            transcription_first_segment_at: firstSegmentAt
+          });
+          if (this.transcriptionStartedAtMs) {
+            const prepMs = this.firstSegmentAtMs - this.transcriptionStartedAtMs;
+            logger.info({ taskId: this.currentTranscriptionId, prepMs }, 'First segment received');
+          }
+        }
+        this.flushSegmentBuffer(false);
       }
       return;
     }

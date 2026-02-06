@@ -23,6 +23,46 @@ import { normalizeScenario, buildPrompt, buildPromptWithMeta, type ScenarioKey }
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
+const UPLOAD_MAX_SIZE_BYTES = (() => {
+  const bytes = process.env.UPLOAD_MAX_SIZE_BYTES ? parseInt(process.env.UPLOAD_MAX_SIZE_BYTES, 10) : NaN;
+  if (!Number.isNaN(bytes) && bytes > 0) {
+    return bytes;
+  }
+  const gb = process.env.UPLOAD_MAX_SIZE_GB ? parseFloat(process.env.UPLOAD_MAX_SIZE_GB) : NaN;
+  if (!Number.isNaN(gb) && gb > 0) {
+    return Math.floor(gb * 1024 * 1024 * 1024);
+  }
+  return 4 * 1024 * 1024 * 1024;
+})();
+
+const ALLOWED_MIME_TYPES = [
+  'audio/mpeg',
+  'audio/wav',
+  'audio/x-m4a',
+  'audio/mp4',
+  'audio/aac',
+  'audio/flac',
+  'audio/ogg',
+  'video/mp4',
+  'video/quicktime',
+  'video/x-msvideo',
+  'video/x-matroska',
+  'video/webm'
+];
+
+const EXT_MIME_MAP: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.avi': 'video/x-msvideo',
+  '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/x-m4a',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg'
+};
 
 export const buildApp = () => {
   // 使用新的日志配置
@@ -67,13 +107,25 @@ export const buildApp = () => {
 
   fastify.register(multipart, {
     limits: {
-      fileSize: 4 * 1024 * 1024 * 1024, // 4GB 默认限制
+      fileSize: UPLOAD_MAX_SIZE_BYTES,
     }
   });
 
   // 全局错误处理
   fastify.setErrorHandler((error, request, reply) => {
     request.log.error(error);
+    const errorCode = (error as any).code;
+    const isFileTooLarge =
+      errorCode === 'FST_REQ_FILE_TOO_LARGE' ||
+      errorCode === 'FST_PART_FILE_TOO_LARGE' ||
+      errorCode === 'LIMIT_FILE_SIZE';
+    if (isFileTooLarge) {
+      return reply.status(413).send({
+        error: 'FileTooLarge',
+        message: `文件超过大小限制（最大 ${Math.round(UPLOAD_MAX_SIZE_BYTES / 1024 / 1024 / 1024)}GB）`,
+        statusCode: 413
+      });
+    }
     const statusCode = (error as any).statusCode || 500;
     reply.status(statusCode).send({
       error: (error as any).name || 'Internal Server Error',
@@ -136,6 +188,48 @@ export const buildApp = () => {
     } catch (e) {
       return defaultValue;
     }
+  };
+
+  const setSetting = (key: string, value: string) => {
+    db.prepare(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    ).run(key, value);
+  };
+
+  const getBooleanSetting = (key: string, defaultValue: boolean): boolean => {
+    const value = getSetting(key, defaultValue ? 'true' : 'false');
+    return value === 'true' || value === '1';
+  };
+
+  const getLocalModeConfig = () => {
+    const envLocalMode = process.env.LOCAL_MODE;
+    const localModeSource = envLocalMode != null ? 'env' : 'settings';
+    const localMode = envLocalMode != null
+      ? (envLocalMode === 'true' || envLocalMode === '1')
+      : getBooleanSetting('local_mode', false);
+
+    const rawAllowedEnv = process.env.LOCAL_MODE_ALLOWED_BASE_PATHS;
+    const allowedBasePathsSource = rawAllowedEnv != null ? 'env' : 'settings';
+    const rawAllowed = rawAllowedEnv != null
+      ? rawAllowedEnv
+      : getSetting('local_mode_allowed_base_paths', '');
+    const allowedBasePaths = rawAllowed
+      .split(',')
+      .map(p => p.trim())
+      .filter(Boolean)
+      .map(p => path.resolve(p));
+
+    return { localMode, allowedBasePaths, localModeSource, allowedBasePathsSource };
+  };
+
+  const normalizePathForCompare = (targetPath: string): string => {
+    const normalized = path.resolve(targetPath);
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+
+  const isPathWithin = (targetPath: string, basePath: string): boolean => {
+    const relativePath = path.relative(basePath, targetPath);
+    return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
   };
 
   // 获取系统状态信息（IP地址、端口等）
@@ -201,6 +295,8 @@ export const buildApp = () => {
     const frontendUrl = frontendPort ? `${requestProtocol}://${defaultIP}:${frontendPort}` : null;
     const backendUrl = `${requestProtocol}://${requestHost}`;
 
+    const { localMode, allowedBasePaths, localModeSource, allowedBasePathsSource } = getLocalModeConfig();
+
     return {
       interfaces: interfaceList,
       defaultIP,
@@ -209,6 +305,11 @@ export const buildApp = () => {
       frontendUrl, // 可能为 null，如果前端没有提供端口
       backendUrl,
       timestamp: new Date().toISOString(),
+      localMode,
+      localModeAllowedBasePaths: allowedBasePaths,
+      localModeSource,
+      localModeAllowedBasePathsSource: allowedBasePathsSource,
+      uploadMaxSizeBytes: UPLOAD_MAX_SIZE_BYTES,
     };
   });
 
@@ -279,6 +380,51 @@ export const buildApp = () => {
     }
   });
 
+  // 本地模式设置
+  fastify.get('/api/settings/local-mode', async (_request, _reply) => {
+    const { localMode, allowedBasePaths, localModeSource, allowedBasePathsSource } = getLocalModeConfig();
+    return {
+      localMode,
+      allowedBasePaths,
+      localModeSource,
+      allowedBasePathsSource,
+    };
+  });
+
+  fastify.put('/api/settings/local-mode', async (request, reply) => {
+    const body = request.body as {
+      localMode?: boolean;
+      allowedBasePaths?: string[];
+    };
+    const { localModeSource, allowedBasePathsSource } = getLocalModeConfig();
+
+    if (body.localMode !== undefined && localModeSource === 'env') {
+      return reply.code(409).send({ error: 'Local mode is controlled by env LOCAL_MODE' });
+    }
+    if (body.allowedBasePaths !== undefined && allowedBasePathsSource === 'env') {
+      return reply.code(409).send({ error: 'Allowed paths are controlled by env LOCAL_MODE_ALLOWED_BASE_PATHS' });
+    }
+
+    if (body.localMode !== undefined) {
+      setSetting('local_mode', body.localMode ? 'true' : 'false');
+    }
+    if (body.allowedBasePaths !== undefined) {
+      const cleaned = body.allowedBasePaths
+        .map(p => String(p).trim())
+        .filter(Boolean)
+        .join(',');
+      setSetting('local_mode_allowed_base_paths', cleaned);
+    }
+
+    const updated = getLocalModeConfig();
+    return {
+      localMode: updated.localMode,
+      allowedBasePaths: updated.allowedBasePaths,
+      localModeSource: updated.localModeSource,
+      allowedBasePathsSource: updated.allowedBasePathsSource,
+    };
+  });
+
   // 获取端口信息（只读，仅用于显示）
   fastify.get('/api/system/ports', async (request, reply) => {
     // 前端端口从前端请求头获取
@@ -295,12 +441,28 @@ export const buildApp = () => {
   // 获取 LLM 配置（脱敏，不含 api_key 明文）
   fastify.get('/api/settings/llm', async (request, reply) => {
     const config = getLLMConfigForAPI();
-    return config ?? { provider: 'ollama', base_url: 'http://localhost:11434', model_name: 'qwen3:14b', api_key_set: false };
+    return config ?? {
+      provider: 'ollama',
+      base_url: 'http://localhost:11434',
+      model_name: 'qwen3:14b',
+      translation_chunk_tokens: 1200,
+      translation_overlap_tokens: 200,
+      translation_context_tokens: 4096,
+      api_key_set: false,
+    };
   });
 
   // 更新 LLM 配置
   fastify.post('/api/settings/llm', async (request, reply) => {
-    const body = request.body as { provider?: string; base_url?: string; model_name?: string; api_key?: string };
+    const body = request.body as {
+      provider?: string;
+      base_url?: string;
+      model_name?: string;
+      api_key?: string;
+      translation_chunk_tokens?: number;
+      translation_overlap_tokens?: number;
+      translation_context_tokens?: number;
+    };
     const provider = body.provider as 'ollama' | 'openai' | undefined;
     if (!provider || !['ollama', 'openai'].includes(provider)) {
       return reply.code(400).send({ error: 'Invalid or missing provider. Must be ollama or openai.' });
@@ -312,6 +474,15 @@ export const buildApp = () => {
     const payload: Parameters<typeof setLLMConfig>[0] = { provider };
     if (body.base_url !== undefined) payload.base_url = body.base_url;
     if (body.model_name !== undefined) payload.model_name = body.model_name;
+    if (body.translation_chunk_tokens !== undefined) {
+      payload.translation_chunk_tokens = body.translation_chunk_tokens;
+    }
+    if (body.translation_overlap_tokens !== undefined) {
+      payload.translation_overlap_tokens = body.translation_overlap_tokens;
+    }
+    if (body.translation_context_tokens !== undefined) {
+      payload.translation_context_tokens = body.translation_context_tokens;
+    }
     if (body.api_key !== undefined) payload.api_key = body.api_key;
     setLLMConfig(payload);
     const updated = getLLMConfigForAPI();
@@ -332,6 +503,92 @@ export const buildApp = () => {
       request.log.error(err);
       return reply.code(200).send({ success: false, message: err?.message || '连接测试失败' });
     }
+  });
+
+  // 本地路径创建项目（本地模式）
+  fastify.post('/api/projects/from-local-path', async (req, reply) => {
+    const { localMode, allowedBasePaths } = getLocalModeConfig();
+    if (!localMode) {
+      return reply.code(403).send({ error: 'Local mode is disabled' });
+    }
+
+    const { path: inputPath, display_name } = req.body as {
+      path?: string;
+      display_name?: string;
+    };
+
+    if (!inputPath || !String(inputPath).trim()) {
+      return reply.code(400).send({ error: 'Missing required path' });
+    }
+
+    const trimmedPath = String(inputPath).trim();
+    const resolvedPath = path.resolve(trimmedPath);
+
+    if (!fs.existsSync(resolvedPath)) {
+      return reply.code(404).send({ error: 'File not found' });
+    }
+
+    const realPath = fs.realpathSync(resolvedPath);
+
+    if (allowedBasePaths.length > 0) {
+      const normalizedTarget = normalizePathForCompare(realPath);
+      const isAllowed = allowedBasePaths.some(base => {
+        const normalizedBase = normalizePathForCompare(base);
+        return isPathWithin(normalizedTarget, normalizedBase);
+      });
+      if (!isAllowed) {
+        return reply.code(400).send({ error: 'Path is not within allowed base paths' });
+      }
+    }
+
+    const stats = fs.statSync(realPath);
+    if (!stats.isFile()) {
+      return reply.code(400).send({ error: 'Path is not a file' });
+    }
+
+    const ext = path.extname(realPath).toLowerCase();
+    const mimeType = EXT_MIME_MAP[ext];
+    if (!mimeType || !ALLOWED_MIME_TYPES.includes(mimeType)) {
+      return reply.code(400).send({
+        error: 'Unsupported file type',
+        message: `File extension ${ext} is not allowed.`,
+        allowed: ALLOWED_MIME_TYPES
+      });
+    }
+
+    const { randomUUID } = await import('node:crypto');
+    const fileId = randomUUID();
+    const basename = path.basename(realPath);
+    const displayName = display_name ? String(display_name).trim() : '';
+
+    const stmt = db.prepare(`
+      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size, scenario)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      fileId,
+      basename,
+      realPath,
+      basename,
+      mimeType,
+      'waiting_extract',
+      null,
+      stats.size,
+      null
+    );
+
+    if (displayName) {
+      db.prepare('UPDATE media_files SET display_name = ? WHERE id = ?').run(displayName, fileId);
+    }
+
+    queue.add('extract', { id: fileId, filepath: realPath });
+
+    return {
+      status: 'success',
+      path: realPath,
+      filename: basename,
+      id: fileId
+    };
   });
 
   // 继续上传重复文件的路由
@@ -407,7 +664,7 @@ export const buildApp = () => {
       finalFilePath,
       originalFilename,
       finalMimeType,
-      'ready_to_transcribe',
+      'waiting_extract',
       file_hash,
       stats.size,
       scenarioKey
@@ -423,6 +680,8 @@ export const buildApp = () => {
 
     // 更新数据库中的文件路径
     db.prepare('UPDATE media_files SET filepath = ? WHERE id = ?').run(finalFilePath, fileId);
+
+    queue.add('extract', { id: fileId, filepath: finalFilePath });
 
     return {
       status: 'success',
@@ -446,6 +705,7 @@ export const buildApp = () => {
     let originalFilename = '';
     let mimetype = '';
     let saved = false;
+    let fileTruncated = false;
 
     try {
       if (typeof req.parts === 'function') {
@@ -465,27 +725,12 @@ export const buildApp = () => {
             originalFilename = part.filename || `upload-${Date.now()}`;
             mimetype = part.mimetype;
 
-            const ALLOWED_TYPES = [
-              'audio/mpeg',
-              'audio/wav',
-              'audio/x-m4a',
-              'audio/mp4',
-              'audio/aac',
-              'audio/flac',
-              'audio/ogg',
-              'video/mp4',
-              'video/quicktime',
-              'video/x-msvideo',
-              'video/x-matroska',
-              'video/webm'
-            ];
-
-            if (!ALLOWED_TYPES.includes(mimetype)) {
+            if (!ALLOWED_MIME_TYPES.includes(mimetype)) {
               await part.toBuffer();
               return reply.code(400).send({
                 error: 'Unsupported file type',
                 message: `File type ${mimetype} is not allowed.`,
-                allowed: ALLOWED_TYPES
+                allowed: ALLOWED_MIME_TYPES
               });
             }
 
@@ -497,6 +742,9 @@ export const buildApp = () => {
             tempFilePath = path.join(tempDir, tempName);
 
             await pipeline(part.file, fs.createWriteStream(tempFilePath));
+            if ((part.file as any).truncated) {
+              fileTruncated = true;
+            }
             req.log.info({ tempFilePath, filename: originalFilename }, 'File saved to temporary path');
             saved = true;
           }
@@ -513,6 +761,9 @@ export const buildApp = () => {
           const tempName = `${timestamp}-${sanitized}`;
           tempFilePath = path.join(tempDir, tempName);
           await pipeline(data.file, fs.createWriteStream(tempFilePath));
+          if ((data.file as any).truncated) {
+            fileTruncated = true;
+          }
           saved = true;
         }
       }
@@ -526,6 +777,16 @@ export const buildApp = () => {
 
     if (!saved || !tempFilePath) {
       return reply.code(400).send({ error: 'No file uploaded' });
+    }
+
+    if (fileTruncated) {
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+      return reply.code(413).send({
+        error: 'FileTooLarge',
+        message: `文件超过大小限制（最大 ${Math.round(UPLOAD_MAX_SIZE_BYTES / 1024 / 1024 / 1024)}GB）`
+      });
     }
 
     const stats = await fs.promises.stat(tempFilePath);
@@ -592,7 +853,7 @@ export const buildApp = () => {
       finalFilePath,
       originalFilename,
       mimetype,
-      'ready_to_transcribe',
+      'waiting_extract',
       fileHash,
       stats.size,
       scenarioKey
@@ -606,6 +867,8 @@ export const buildApp = () => {
     }
 
     db.prepare('UPDATE media_files SET filepath = ? WHERE id = ?').run(finalFilePath, fileId);
+
+    queue.add('extract', { id: fileId, filepath: finalFilePath });
 
     return {
       status: 'success',
@@ -626,19 +889,17 @@ export const buildApp = () => {
     }
 
     let transcription = null;
-    if (file.status === 'completed') {
-      const transStmt = db.prepare('SELECT * FROM transcriptions WHERE media_file_id = ?');
-      const result = transStmt.get(id) as any;
-      if (result) {
-        try {
-          // 如果是 JSON 格式字符串，尝试解析
-          transcription = {
-            ...result,
-            content: result.format === 'json' ? JSON.parse(result.content) : result.content
-          };
-        } catch (e) {
-          transcription = result;
-        }
+    const transStmt = db.prepare('SELECT * FROM transcriptions WHERE media_file_id = ?');
+    const result = transStmt.get(id) as any;
+    if (result) {
+      try {
+        // 如果是 JSON 格式字符串，尝试解析
+        transcription = {
+          ...result,
+          content: result.format === 'json' ? JSON.parse(result.content) : result.content
+        };
+      } catch (e) {
+        transcription = result;
       }
     }
 
@@ -648,6 +909,8 @@ export const buildApp = () => {
       original_name: file.original_name,
       status: file.status, // pending, processing, completed, error
       created_at: file.created_at,
+      transcription_started_at: file.transcription_started_at ?? null,
+      transcription_first_segment_at: file.transcription_first_segment_at ?? null,
       transcription
     };
   });
@@ -785,6 +1048,8 @@ export const buildApp = () => {
       size: fileSize, // ✅ 添加文件大小
       summary_count: summaryCount?.count || 0, // ✅ 添加总结数量
       transcription_progress: file.transcription_progress != null ? file.transcription_progress : null, // 转写中时 0–100
+      transcription_started_at: file.transcription_started_at ?? null,
+      transcription_first_segment_at: file.transcription_first_segment_at ?? null,
       transcription
     };
   });
@@ -810,7 +1075,7 @@ export const buildApp = () => {
       return reply.code(404).send({ error: 'Project not found' });
     }
 
-    if (['extracting', 'transcribing', 'processing'].includes(file.status)) {
+    if (['waiting_extract', 'extracting', 'transcribing', 'processing'].includes(file.status)) {
       return reply.code(400).send({ error: 'Project is already processing' });
     }
 
@@ -818,8 +1083,12 @@ export const buildApp = () => {
       return reply.code(400).send({ error: 'Project file path not found' });
     }
 
-    if (!['ready_to_transcribe', 'pending', 'error', 'completed'].includes(file.status)) {
+    if (!['ready_to_transcribe', 'error', 'completed', 'cancelled'].includes(file.status)) {
       return reply.code(400).send({ error: 'Project is not ready for transcription' });
+    }
+
+    if (!file.audio_path || !fs.existsSync(file.audio_path)) {
+      return reply.code(400).send({ error: 'Audio is not extracted yet' });
     }
 
     const meta = body.meta;
@@ -1181,12 +1450,35 @@ export const buildApp = () => {
     if (!trans) {
       return reply.code(404).send({ error: 'Transcription not found' });
     }
-    const row = db.prepare('SELECT id, transcription_id, language, content, created_at FROM translations WHERE transcription_id = ? AND language = ?').get(trans.id, language) as any;
+    const row = db
+      .prepare(
+        'SELECT id, transcription_id, language, content, status, progress, total_chunks, completed_chunks, started_at, updated_at, created_at FROM translations WHERE transcription_id = ? AND language = ?'
+      )
+      .get(trans.id, language) as any;
     if (!row) {
       return reply.code(404).send({ error: 'Translation not found for this language' });
     }
-    const content = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
-    return { id: row.id, transcription_id: row.transcription_id, language: row.language, content, created_at: row.created_at };
+    let content: any = null;
+    if (row.content) {
+      try {
+        content = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
+      } catch {
+        content = null;
+      }
+    }
+    return {
+      id: row.id,
+      transcription_id: row.transcription_id,
+      language: row.language,
+      content,
+      status: row.status,
+      progress: row.progress,
+      total_chunks: row.total_chunks,
+      completed_chunks: row.completed_chunks,
+      started_at: row.started_at,
+      updated_at: row.updated_at,
+      created_at: row.created_at,
+    };
   });
 
   const sanitizeFilename = (name: string) => {
@@ -1400,7 +1692,14 @@ export const buildApp = () => {
       return reply.code(404).send({ error: 'Project not found' });
     }
 
-    // 2. 数据库删除
+    // 2. 取消任务（若正在转写/排队）
+    try {
+      queue.cancelByProjectId(id);
+    } catch (e) {
+      request.log.warn({ projectId: id, err: e }, 'Failed to cancel queue task');
+    }
+
+    // 3. 数据库删除
     // 使用事务确保原子性（先删 translations 再删 transcriptions，因 FK 关联）
     const deleteTransaction = db.transaction(() => {
       db.prepare('DELETE FROM translations WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
@@ -1416,21 +1715,28 @@ export const buildApp = () => {
       return reply.code(500).send({ error: 'Database deletion failed' });
     }
 
-    // 3. 物理文件删除 (不阻塞响应)
-    // 使用统一的路径服务删除整个项目目录
+    // 4. 物理文件删除 (不阻塞响应)
+    // 本地路径项目不删除用户文件，仅删除项目目录内衍生文件
     try {
-      const basePath = ProjectPathService.parseBasePathFromPath(file.filepath);
-      if (basePath) {
-        const projectDir = ProjectPathService.getProjectDir(basePath, id);
-        if (fs.existsSync(projectDir)) {
-          // 删除整个项目目录（包含所有文件）
-          await fs.promises.rm(projectDir, { recursive: true, force: true });
-          request.log.info({ projectId: id, projectDir }, 'Project directory deleted');
+      const isProjectPath = ProjectPathService.isProjectPath(file.filepath);
+      if (isProjectPath) {
+        const basePath = ProjectPathService.parseBasePathFromPath(file.filepath);
+        if (basePath) {
+          const projectDir = ProjectPathService.getProjectDir(basePath, id);
+          if (fs.existsSync(projectDir)) {
+            await fs.promises.rm(projectDir, { recursive: true, force: true });
+            request.log.info({ projectId: id, projectDir }, 'Project directory deleted');
+          }
         }
       } else {
-        // 如果无法解析基础路径，回退到删除单个文件
-        if (fs.existsSync(file.filepath)) {
-          await fs.promises.unlink(file.filepath);
+        const storagePaths = StorageService.getAllPaths().map(p => p.path);
+        const candidateBasePaths = new Set<string>([...storagePaths, DEFAULT_UPLOAD_DIR]);
+        for (const basePath of candidateBasePaths) {
+          const projectDir = ProjectPathService.getProjectDir(basePath, id);
+          if (fs.existsSync(projectDir)) {
+            await fs.promises.rm(projectDir, { recursive: true, force: true });
+            request.log.info({ projectId: id, projectDir }, 'Project directory deleted (local path)');
+          }
         }
         if (file.audio_path && fs.existsSync(file.audio_path)) {
           await fs.promises.unlink(file.audio_path);
@@ -1458,10 +1764,10 @@ export const buildApp = () => {
       return reply.code(400).send({ error: 'Can only retry failed projects' });
     }
 
-    // 重置状态
+    // 重置状态（先提取音频）
     const updateStmt = db.prepare(`
       UPDATE media_files
-      SET status = 'pending', error_message = NULL, failed_stage = NULL
+      SET status = 'waiting_extract', error_message = NULL, failed_stage = NULL
       WHERE id = ?
     `);
     updateStmt.run(id);
@@ -1470,11 +1776,10 @@ export const buildApp = () => {
     db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
     db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
 
-    // 重新加入队列
-    // 如果原始文件不存在了，队列处理时会报错，循环进入 error 状态，这是合理的
-    queue.add('transcribe', { id: file.id, filepath: file.filepath });
+    // 重新加入队列（先提取音频）
+    queue.add('extract', { id: file.id, filepath: file.filepath });
 
-    return { status: 'success', message: 'Task queued for retry' };
+    return { status: 'success', message: 'Audio extraction queued' };
   });
 
   // ========== 存储路径管理 API ==========

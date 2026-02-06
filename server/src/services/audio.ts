@@ -27,7 +27,11 @@ export class AudioExtractor {
    * 提取音频并转换为 16kHz 单声道 WAV (Whisper 最佳格式)
    * @returns { path: string, duration: number }
    */
-  static async extract(inputPath: string, outputDir: string = path.dirname(inputPath)): Promise<{ path: string, duration: number }> {
+  static async extract(
+    inputPath: string,
+    outputDir: string = path.dirname(inputPath),
+    signal?: AbortSignal
+  ): Promise<{ path: string, duration: number }> {
     const fileName = path.basename(inputPath, path.extname(inputPath));
     const outputPath = path.join(outputDir, `${fileName}_16k.wav`);
 
@@ -47,19 +51,43 @@ export class AudioExtractor {
     console.log(`[Audio] Extracting audio from ${inputPath} to ${outputPath}`);
 
     return new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
+      if (signal?.aborted) {
+        return reject(new Error('Extraction cancelled'));
+      }
+
+      const command = ffmpeg(inputPath)
         .toFormat('wav')
         .audioFrequency(16000) // 16kHz for Whisper
         .audioChannels(1)      // Mono
         .on('end', () => {
+          if (signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
           console.log(`[Audio] Extraction completed`);
           resolve({ path: outputPath, duration });
         })
         .on('error', (err) => {
+          if (signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
           console.error(`[Audio] Error extracting: ${err.message}`);
           reject(err);
-        })
-        .save(outputPath);
+        });
+
+      const onAbort = () => {
+        try {
+          command.kill('SIGKILL');
+        } catch (_e) {
+          // ignore
+        }
+        reject(new Error('Extraction cancelled'));
+      };
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      command.save(outputPath);
     });
   }
 }

@@ -26,10 +26,12 @@ export const DuplicateFileDialog: React.FC<DuplicateFileDialogProps> = ({
     const colorMap: Record<string, string> = {
       completed: 'text-green-600 bg-green-50 border-green-200',
       processing: 'text-blue-600 bg-blue-50 border-blue-200',
+      waiting_extract: 'text-indigo-600 bg-indigo-50 border-indigo-200',
       extracting: 'text-indigo-600 bg-indigo-50 border-indigo-200',
       transcribing: 'text-blue-600 bg-blue-50 border-blue-200',
       ready_to_transcribe: 'text-blue-600 bg-blue-50 border-blue-200',
       pending: 'text-gray-600 bg-gray-50 border-gray-200',
+      cancelled: 'text-gray-500 bg-gray-100 border-gray-200',
       error: 'text-red-600 bg-red-50 border-red-200',
     };
     return colorMap[status] || 'text-gray-600 bg-gray-50 border-gray-200';

@@ -25,11 +25,18 @@ export interface TranscriptionResultProps {
 export type FilterMode = 'all' | 'edited';
 export type ViewMode = 'original' | 'translated' | 'bilingual';
 
+export interface SubtitleOverlayData {
+  viewMode: ViewMode;
+  originalSegments: Segment[];
+  translatedSegments: Segment[];
+}
+
 export interface TranscriptionPanelProps {
   project: Project;
   className?: string;
   playerRef: React.RefObject<{ seekTo: (time: number) => void }>;
   currentPlayTime: number;
+  onOverlayDataChange?: (data: SubtitleOverlayData) => void;
 }
 
 export interface TranslationViewProps {

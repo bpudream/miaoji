@@ -7,6 +7,9 @@ const DEFAULT_LLM_CONFIG: LLMConfig = {
   provider: 'ollama',
   base_url: 'http://localhost:11434',
   model_name: 'qwen3:14b',
+  translation_chunk_tokens: 1200,
+  translation_overlap_tokens: 200,
+  translation_context_tokens: 4096,
 };
 
 /**
@@ -46,6 +49,21 @@ export function setLLMConfig(config: Partial<LLMConfig> & { provider: LLMConfig[
   if (baseUrl != null) next.base_url = baseUrl;
   const modelName = config.model_name !== undefined ? config.model_name : current.model_name;
   if (modelName != null) next.model_name = modelName;
+  const chunkTokens =
+    config.translation_chunk_tokens !== undefined
+      ? config.translation_chunk_tokens
+      : current.translation_chunk_tokens;
+  if (chunkTokens != null) next.translation_chunk_tokens = chunkTokens;
+  const overlapTokens =
+    config.translation_overlap_tokens !== undefined
+      ? config.translation_overlap_tokens
+      : current.translation_overlap_tokens;
+  if (overlapTokens != null) next.translation_overlap_tokens = overlapTokens;
+  const contextTokens =
+    config.translation_context_tokens !== undefined
+      ? config.translation_context_tokens
+      : current.translation_context_tokens;
+  if (contextTokens != null) next.translation_context_tokens = contextTokens;
   const apiKey = config.api_key !== undefined ? (config.api_key === '' ? undefined : config.api_key) : current.api_key;
   if (apiKey != null) next.api_key = apiKey;
   const value = JSON.stringify(next);

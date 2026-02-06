@@ -48,4 +48,10 @@ export interface LLMConfig {
   api_key?: string;
   /** 模型名，如 qwen3:14b / deepseek-chat */
   model_name?: string;
+  /** 翻译分块参数：单块目标 token 数（估算） */
+  translation_chunk_tokens?: number;
+  /** 翻译分块参数：上下文重叠 token 数（估算） */
+  translation_overlap_tokens?: number;
+  /** 翻译分块参数：上下文窗口 token 上限（估算） */
+  translation_context_tokens?: number;
 }

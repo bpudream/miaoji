@@ -77,6 +77,15 @@
 * ✅ 智能分块与上下文注入算法
 * ✅ 后端翻译任务处理流（通过 Sprint-02 队列多类型能力入队执行）
 
+---
+
+## 默认分块参数建议表
+
+| Provider | model_name 示例 | context_tokens | chunk_tokens | overlap_tokens | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| Ollama | qwen3:14b | 4096 | 1200 | 200 | 本地 14B 更保守，避免上下文过长导致质量下降 |
+| DeepSeek/OpenAI | deepseek-chat | 8192 | 3000 | 400 | 在线模型上下文更大，可适当提高 chunk |
+
 
 
 ---

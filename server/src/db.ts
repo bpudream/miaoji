@@ -158,6 +158,16 @@ const initDb = () => {
     }
   }
 
+  const ensureColumn = (table: string, column: string, definition: string) => {
+    const columns = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((row: any) => row.name as string);
+    if (!columns.includes(column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+    }
+  };
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS media_files (
       id TEXT PRIMARY KEY,
@@ -171,7 +181,7 @@ const initDb = () => {
       mime_type TEXT,
       scenario TEXT,
       transcribe_meta TEXT,       -- JSON: { team_home_id?, team_away_id?, keywords? }
-      status TEXT DEFAULT 'pending', -- pending, extracting, ready_to_transcribe, transcribing, transcribed, completed, error
+      status TEXT DEFAULT 'pending', -- pending, waiting_extract, extracting, ready_to_transcribe, transcribing, transcribed, completed, cancelled, error
       error_message TEXT,
       failed_stage TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -195,6 +205,8 @@ const initDb = () => {
     'display_name TEXT', // 添加 display_name 字段
     'file_hash TEXT', // 添加 file_hash 字段
     'transcription_progress REAL', // 转写进度 0–100，仅 transcribing 时有值
+    'transcription_started_at DATETIME', // 转写开始时间
+    'transcription_first_segment_at DATETIME', // 首次输出时间
     'scenario TEXT',
     'transcribe_meta TEXT' // JSON: { team_home_id?, team_away_id?, keywords? }
   ];
@@ -243,11 +255,27 @@ const initDb = () => {
       transcription_id INTEGER NOT NULL,
       language TEXT NOT NULL,
       content TEXT NOT NULL,
+      status TEXT,
+      progress REAL,
+      total_chunks INTEGER,
+      completed_chunks INTEGER,
+      started_at DATETIME,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (transcription_id) REFERENCES transcriptions(id),
       UNIQUE(transcription_id, language)
     );
   `);
+  if (!isTest) {
+    ensureColumn('translations', 'status', 'status TEXT');
+    ensureColumn('translations', 'progress', 'progress REAL');
+    ensureColumn('translations', 'total_chunks', 'total_chunks INTEGER');
+    ensureColumn('translations', 'completed_chunks', 'completed_chunks INTEGER');
+    ensureColumn('translations', 'started_at', 'started_at DATETIME');
+    ensureColumn('translations', 'updated_at', 'updated_at DATETIME');
+    // 兼容旧库：新增列后补默认值
+    db.exec("UPDATE translations SET updated_at = datetime('now') WHERE updated_at IS NULL");
+  }
   try {
     db.exec('CREATE INDEX IF NOT EXISTS idx_translations_transcription_id ON translations(transcription_id)');
   } catch (e: any) {

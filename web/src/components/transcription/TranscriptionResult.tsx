@@ -83,20 +83,27 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
   }, [fileId, projectStatus]);
 
   useEffect(() => {
-    if (
-      data?.status === 'completed' &&
-      data.transcription?.content &&
-      isInitialLoad.current
-    ) {
-      const initialSegments = extractSegmentsFromContent(data.transcription.content);
-      if (initialSegments.length > 0) {
-        setSegments(initialSegments);
-        setHistory([initialSegments]);
+    if (!data?.transcription?.content) return;
+    const nextSegments = extractSegmentsFromContent(data.transcription.content);
+    if (nextSegments.length === 0) return;
+
+    if (data.status === 'completed') {
+      if (isEditing) return;
+      if (isInitialLoad.current) {
+        setSegments(nextSegments);
+        setHistory([nextSegments]);
         setHistoryIndex(0);
         isInitialLoad.current = false;
+        return;
       }
+      if (nextSegments.length !== segments.length) {
+        setSegments(nextSegments);
+      }
+      return;
     }
-  }, [data]);
+
+    setSegments(nextSegments);
+  }, [data?.transcription?.content, data?.status, isEditing, segments.length]);
 
   useEffect(() => {
     if (data && onStatsChange) {
@@ -177,6 +184,13 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
   }, [externalIsEditing]);
 
   useEffect(() => {
+    if (data?.status && data.status !== 'completed' && isEditing) {
+      setIsEditing(false);
+      onEditingChange?.(false);
+    }
+  }, [data?.status, isEditing, onEditingChange]);
+
+  useEffect(() => {
     if (currentPlayTime > 0 && autoScroll) {
       const currentIndex = segments.findIndex(
         (seg) => currentPlayTime >= seg.start && currentPlayTime < seg.end
@@ -253,6 +267,17 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
     ? 'sm:grid-cols-[200px_1fr]'
     : 'sm:grid-cols-[140px_1fr]';
 
+  const isStreaming = data.status === 'transcribing' || data.status === 'processing';
+  const canEdit = data.status === 'completed';
+  const prepStart =
+    data.transcription_started_at ? new Date(data.transcription_started_at).getTime() : null;
+  const prepEnd =
+    data.transcription_first_segment_at ? new Date(data.transcription_first_segment_at).getTime() : null;
+  const prepElapsedSec =
+    prepStart && !prepEnd ? Math.max(0, Math.round((Date.now() - prepStart) / 1000)) : null;
+  const prepTotalSec =
+    prepStart && prepEnd ? Math.max(0, Math.round((prepEnd - prepStart) / 1000)) : null;
+
   return (
     <div className={clsx('flex h-full flex-col p-5 pt-0', className)}>
       <div className="flex-shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 pb-3">
@@ -297,14 +322,17 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
         </div>
       </div>
 
-      {(data.status === 'transcribing' || data.status === 'processing') && (
+      {isStreaming && (
         <div className="flex items-center space-x-2 text-blue-600">
           <span className="animate-spin">⏳</span>
-          <span>转写中...</span>
+          <span>
+            转写中...
+            {prepElapsedSec != null && ` 模型准备中，已等待 ${prepElapsedSec}s`}
+          </span>
         </div>
       )}
 
-      {data.status === 'completed' && (
+      {segments.length > 0 && (
         <div className="flex-1 overflow-hidden overflow-x-hidden">
           <div className="h-full overflow-y-auto overflow-x-hidden pr-1">
             {filteredSegments.length > 0 ? (
@@ -361,7 +389,7 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
                           {formatTimestamp(seg.end, useLongFormat)}
                         </span>
                       </div>
-                      {isEditing ? (
+                      {canEdit && isEditing ? (
                         <textarea
                           className="w-full min-h-[2.8rem] rounded-lg border border-gray-200 bg-white/90 px-3 py-2 text-base leading-relaxed shadow-inner focus:border-blue-500 focus:ring-2 focus:ring-blue-200 break-words whitespace-pre-wrap"
                           value={seg.text}
@@ -382,9 +410,9 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
                               ? 'bg-indigo-50/50'
                               : 'hover:bg-gray-100'
                           )}
-                          onDoubleClick={() => enableEditing(seg.idx)}
+                          onDoubleClick={() => (canEdit ? enableEditing(seg.idx) : undefined)}
                           onClick={() => onSegmentClick?.(seg.start)}
-                          title="双击编辑，单击跳转"
+                          title={canEdit ? '双击编辑，单击跳转' : '单击跳转'}
                         >
                           {getHighlightedText(seg.text)}
                         </div>
@@ -392,6 +420,12 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
                     </div>
                   );
                 })}
+                {isStreaming && (
+                  <div className="flex items-center justify-center gap-2 text-gray-400 text-sm py-3">
+                    <span className="animate-spin">⏳</span>
+                    正在生成更多...
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-gray-50 p-4 rounded whitespace-pre-wrap max-h-96 overflow-y-auto text-lg text-gray-600 break-words">
@@ -412,7 +446,21 @@ export const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
         </div>
       )}
 
-      {isEditing && (
+      {segments.length === 0 && isStreaming && (
+        <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+          <span className="animate-spin text-xl mb-2">⏳</span>
+          <span>
+            {prepElapsedSec != null ? `模型准备中，已等待 ${prepElapsedSec}s` : '正在生成更多...'}
+          </span>
+          {prepTotalSec != null && (
+            <span className="text-xs text-gray-300 mt-2">
+              首次输出耗时 {prepTotalSec}s
+            </span>
+          )}
+        </div>
+      )}
+
+      {canEdit && isEditing && (
         <div className="fixed bottom-6 right-6 flex items-center gap-2 rounded-full bg-white/90 px-4 py-2 shadow-xl border border-gray-100">
           <button
             onClick={handleUndo}

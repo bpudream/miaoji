@@ -1,7 +1,8 @@
-import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
-import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, PlayCircle } from 'lucide-react';
+import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
+import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, PlayCircle, Maximize2, Minimize2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getApiUrl } from '../lib/api';
+import type { SubtitleOverlayData, ViewMode } from './transcription/types';
 
 export interface MediaPlayerRef {
   seekTo: (time: number) => void;
@@ -18,11 +19,12 @@ interface MediaPlayerProps {
   onTimeUpdate?: (currentTime: number) => void;
   onPlay?: () => void;
   onPause?: () => void;
+  subtitleOverlayData?: SubtitleOverlayData;
   className?: string;
 }
 
 export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
-  ({ projectId, isVideo, hasAudioPath, playerMode, onTimeUpdate, onPlay, onPause, className }, ref) => {
+  ({ projectId, isVideo, hasAudioPath, playerMode, onTimeUpdate, onPlay, onPause, subtitleOverlayData, className }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -33,6 +35,9 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
     const [volume, setVolume] = useState(1);
     const [isMuted, setIsMuted] = useState(false);
     const [playbackRate, setPlaybackRate] = useState(1);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [overlayEnabled, setOverlayEnabled] = useState(true);
+    const [overlayMode, setOverlayMode] = useState<'follow' | ViewMode>('follow');
 
     // 模式切换状态追踪
     const previousModeRef = useRef<'audio' | 'video' | null>(null);
@@ -41,9 +46,13 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
     // 预加载状态追踪
     const videoLoadedRef = useRef(false);
     const audioLoadedRef = useRef(false);
+    const videoContainerRef = useRef<HTMLDivElement>(null);
 
     const mediaRef = playerMode === 'video' && isVideo ? videoRef : audioRef;
     const showVideo = playerMode === 'video' && isVideo;
+    const subtitleViewMode = subtitleOverlayData?.viewMode ?? 'original';
+    const originalSegments = subtitleOverlayData?.originalSegments ?? [];
+    const translatedSegments = subtitleOverlayData?.translatedSegments ?? [];
 
     // 构建媒体 URL
     const baseMediaUrl = `${getApiUrl()}/projects/${projectId}/media`;
@@ -283,6 +292,128 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
       }
     };
 
+    const toggleFullscreen = async () => {
+      if (!showVideo) return;
+      const container = videoContainerRef.current;
+      if (!container) return;
+
+      try {
+        if (!document.fullscreenElement) {
+          await container.requestFullscreen();
+        } else {
+          await document.exitFullscreen();
+        }
+      } catch (error) {
+        console.warn('[MediaPlayer] 全屏切换失败:', error);
+      }
+    };
+
+    useEffect(() => {
+      const handleFullscreenChange = () => {
+        setIsFullscreen(Boolean(document.fullscreenElement));
+      };
+
+      document.addEventListener('fullscreenchange', handleFullscreenChange);
+      return () => {
+        document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      };
+    }, []);
+
+    const activeOriginal = useMemo(() => {
+      return originalSegments.find(
+        (seg) => currentTime >= seg.start && currentTime < seg.end
+      );
+    }, [originalSegments, currentTime]);
+
+    const activeTranslated = useMemo(() => {
+      return translatedSegments.find(
+        (seg) => currentTime >= seg.start && currentTime < seg.end
+      );
+    }, [translatedSegments, currentTime]);
+
+    const effectiveOverlayMode =
+      overlayMode === 'follow' ? subtitleViewMode : overlayMode;
+    const overlayText = useMemo(() => {
+      const countCjk = (text: string) => (text.match(/[\u4e00-\u9fff]/g) || []).length;
+      let line1 = '';
+      let line2 = '';
+      if (effectiveOverlayMode === 'original') {
+        line1 = activeOriginal?.text ?? '';
+      } else if (effectiveOverlayMode === 'translated') {
+        line1 = activeTranslated?.text ?? '';
+      } else if (effectiveOverlayMode === 'bilingual') {
+        line1 = activeOriginal?.text ?? '';
+        line2 = activeTranslated?.text ?? '';
+        if (!line1 && line2) {
+          line1 = line2;
+          line2 = '';
+        }
+        if (line1 && line2) {
+          const line1Cjk = countCjk(line1);
+          const line2Cjk = countCjk(line2);
+          if (line2Cjk > line1Cjk) {
+            const temp = line1;
+            line1 = line2;
+            line2 = temp;
+          }
+        }
+      }
+      return { line1: line1.trim(), line2: line2.trim() };
+    }, [effectiveOverlayMode, activeOriginal, activeTranslated]);
+
+    const overlayVisible =
+      showVideo && overlayEnabled && (overlayText.line1 || overlayText.line2);
+
+    const seekBy = (deltaSeconds: number) => {
+      const media = mediaRef.current;
+      if (!media) return;
+      const next = Math.max(0, Math.min(media.duration || 0, media.currentTime + deltaSeconds));
+      media.currentTime = next;
+      setCurrentTime(next);
+    };
+
+    useEffect(() => {
+      if (!isFullscreen) return;
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.code === 'Space' || event.key === ' ') {
+          event.preventDefault();
+          togglePlayPause();
+          return;
+        }
+        if (event.key === 's' || event.key === 'S') {
+          event.preventDefault();
+          if (showVideo) setOverlayEnabled((prev) => !prev);
+          return;
+        }
+        if (event.code === 'ArrowLeft') {
+          event.preventDefault();
+          seekBy(-3);
+          return;
+        }
+        if (event.code === 'ArrowRight') {
+          event.preventDefault();
+          seekBy(3);
+          return;
+        }
+        if (event.code === 'ArrowUp') {
+          event.preventDefault();
+          setVolume((v) => Math.min(1, v + 0.05));
+          return;
+        }
+        if (event.code === 'ArrowDown') {
+          event.preventDefault();
+          setVolume((v) => Math.max(0, v - 0.05));
+          return;
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }, [isFullscreen, togglePlayPause, showVideo]);
+
     const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
       const time = parseFloat(e.target.value);
       if (mediaRef.current) {
@@ -313,7 +444,10 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
     return (
       <div className={clsx("media-player-real-box flex flex-col h-full min-h-0", className)}>
         {/* 媒体展示区域 - 包含视频和音频UI */}
-        <div className="flex-1 min-h-0 mb-2.5 relative bg-gray-50 rounded-xl overflow-hidden">
+        <div
+          ref={videoContainerRef}
+          className="flex-1 min-h-0 mb-2.5 relative bg-gray-50 rounded-xl overflow-hidden"
+        >
 
              {/* 视频元素 - 始终存在，通过 CSS 控制显示 */}
              <div className={clsx("w-full h-full bg-black flex items-center justify-center", !showVideo && "hidden")}>
@@ -332,6 +466,26 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
                     />
                 </video>
              </div>
+
+            {overlayVisible && (
+              <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-[8%] z-10 w-full px-6 flex justify-center">
+                <div
+                  className={clsx(
+                    'max-w-[85%] md:max-w-[70%] rounded-2xl bg-black/60 backdrop-blur-sm px-4 py-2.5 text-center text-white shadow-lg',
+                    isFullscreen ? 'text-lg leading-relaxed' : 'text-base leading-relaxed'
+                  )}
+                >
+                  <div className="drop-shadow-[0_2px_6px_rgba(0,0,0,0.65)] whitespace-pre-wrap">
+                    {overlayText.line1}
+                  </div>
+                  {overlayText.line2 && (
+                    <div className="mt-1 text-sm text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.65)] whitespace-pre-wrap">
+                      {overlayText.line2}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
              {/* 音频元素 - 始终存在，始终隐藏 (使用自定义 UI) */}
              <audio ref={audioRef} className="hidden" preload="auto" />
@@ -411,7 +565,7 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
               <button
                 onClick={togglePlayPause}
                 className="p-3 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-300/50 transition-colors"
-                title={isPlaying ? '暂停' : '播放'}
+                title={isPlaying ? '暂停 (全屏时快捷键: 空格)' : '播放 (全屏时快捷键: 空格)'}
               >
                 {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
               </button>
@@ -459,6 +613,46 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
                 <option value="1.5">1.5x</option>
                 <option value="2">2x</option>
               </select>
+
+              <button
+                onClick={() => setOverlayEnabled((prev) => !prev)}
+                className={clsx(
+                  'px-2.5 py-1 text-xs rounded-full border transition-colors',
+                  overlayEnabled
+                    ? 'border-indigo-200 text-indigo-600 bg-indigo-50'
+                    : 'border-gray-200 text-gray-500 bg-white hover:bg-gray-50'
+                )}
+                title={overlayEnabled ? '关闭字幕 (全屏时快捷键: S)' : '开启字幕 (全屏时快捷键: S)'}
+                disabled={!showVideo}
+              >
+                字幕{overlayEnabled ? '开' : '关'}
+              </button>
+              <select
+                value={overlayMode}
+                onChange={(e) => setOverlayMode(e.target.value as 'follow' | ViewMode)}
+                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white disabled:opacity-50"
+                title="字幕显示模式"
+                disabled={!overlayEnabled || !showVideo}
+              >
+                <option value="follow">跟随视图</option>
+                <option value="original">原文</option>
+                <option value="translated">译文</option>
+                <option value="bilingual">双语</option>
+              </select>
+
+              {showVideo && (
+                <button
+                  onClick={toggleFullscreen}
+                  className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 transition-colors"
+                  title={isFullscreen ? '退出全屏' : '进入全屏'}
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="w-5 h-5" />
+                  ) : (
+                    <Maximize2 className="w-5 h-5" />
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -479,6 +673,7 @@ export interface MediaPlayerPanelProps {
   onModeChange: (mode: 'audio' | 'video') => void;
   playerRef: React.RefObject<MediaPlayerRef>;
   onTimeUpdate?: (time: number) => void;
+  subtitleOverlayData?: SubtitleOverlayData;
   className?: string;
 }
 
@@ -491,6 +686,7 @@ export const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({
   onModeChange,
   playerRef,
   onTimeUpdate,
+  subtitleOverlayData,
   className
 }) => {
   return (
@@ -542,6 +738,7 @@ export const MediaPlayerPanel: React.FC<MediaPlayerPanelProps> = ({
           hasAudioPath={hasAudioPath}
           playerMode={playerMode}
           onTimeUpdate={onTimeUpdate}
+          subtitleOverlayData={subtitleOverlayData}
           className="h-full"
         />
       </div>

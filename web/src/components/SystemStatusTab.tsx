@@ -90,6 +90,7 @@ export const SystemStatusTab = () => {
     return `${protocol}//${selectedIP}${port ? `:${port}` : ''}${basePath}`;
   };
 
+
   if (loading && !systemStatus) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
