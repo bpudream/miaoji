@@ -246,7 +246,7 @@ export const SystemStatusTab = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">端口</span>
-                <span className="font-mono">{backendPort}</span>
+                <span className="font-mono">{systemStatus?.backendPort ?? backendPort}</span>
               </div>
               {backendHealth.message && backendHealth.status !== 'ok' && (
                 <div className="mt-2 text-xs text-red-500 bg-red-50 p-2 rounded">
