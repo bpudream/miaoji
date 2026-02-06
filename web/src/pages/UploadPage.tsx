@@ -245,12 +245,12 @@ export const UploadPage = () => {
               或者
               <label className="text-blue-600 hover:underline hover:text-blue-700 cursor-pointer ml-1 font-medium">
                 点击选择文件
-                <input type="file" className="hidden" onChange={onChange} accept="audio/*,video/*" />
+                <input type="file" className="hidden" onChange={onChange} accept="audio/*,video/*,.mkv,.mp4,.mov,.avi,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg" />
               </label>
             </p>
             <div className="flex items-center justify-center gap-2 text-sm text-gray-400 bg-gray-50 py-2 px-4 rounded-full w-fit mx-auto">
               <FileAudio className="w-4 h-4" />
-              支持 MP3, WAV, M4A, MP4, MOV 等格式 (最大 4GB)
+              支持 MP3, WAV, M4A, MP4, MOV, MKV 等格式 (最大 4GB)
             </div>
           </div>
         )}

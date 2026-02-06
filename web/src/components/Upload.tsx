@@ -39,7 +39,7 @@ export const Upload: React.FC<Props> = ({ onUploadSuccess }) => {
         disabled={uploading}
         className="hidden"
         id="file-upload"
-        accept="audio/*,video/*"
+        accept="audio/*,video/*,.mkv,.mp4,.mov,.avi,.webm,.mp3,.wav,.m4a,.aac,.flac,.ogg"
       />
       <label
         htmlFor="file-upload"

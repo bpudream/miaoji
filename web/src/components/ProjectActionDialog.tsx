@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getProject, Project, updateProjectName } from '../lib/api';
+import { getProjectStatusText } from '../lib/status';
 import {
   X,
   Trash2,
@@ -138,19 +139,6 @@ export const ProjectActionDialog: React.FC<ProjectActionDialogProps> = ({
     }
   };
 
-  const getStatusText = (status: string) => {
-    const statusMap: Record<string, string> = {
-      pending: '等待中',
-      extracting: '提取音频',
-      ready_to_transcribe: '准备转写',
-      transcribing: '转写中',
-      processing: '处理中',
-      completed: '已完成',
-      error: '错误'
-    };
-    return statusMap[status] || status;
-  };
-
   if (showMigrationDialog && project) {
     return (
       <FileMigrationDialog
@@ -256,7 +244,7 @@ export const ProjectActionDialog: React.FC<ProjectActionDialogProps> = ({
                     </span>
                     <span className="flex items-center gap-1.5 text-sm font-medium">
                       {getStatusIcon(project.status)}
-                      {getStatusText(project.status)}
+                      {getProjectStatusText(project.status, 'short')}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">

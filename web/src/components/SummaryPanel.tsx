@@ -49,7 +49,8 @@ export const SummaryPanel: React.FC<SummaryPanelProps> = ({ projectId, transcrip
       const res = await generateSummary(projectId, mode);
       setSummary(res.summary);
     } catch (err: any) {
-      setError(err.response?.data?.error || '生成总结失败');
+      const data = err.response?.data;
+      setError(data?.details || data?.message || data?.error || '生成总结失败');
     } finally {
       setLoading(false);
     }

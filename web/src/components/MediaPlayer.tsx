@@ -49,6 +49,7 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
     const baseMediaUrl = `${getApiUrl()}/projects/${projectId}/media`;
     const videoUrl = baseMediaUrl;
     const audioUrl = hasAudioPath ? `${baseMediaUrl}?type=audio` : baseMediaUrl;
+    const vttUrl = `${getApiUrl()}/projects/${projectId}/export?format=vtt`;
 
     // 暴露方法给父组件
     useImperativeHandle(ref, () => ({
@@ -321,7 +322,15 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(
                     className="w-full h-full object-contain"
                     playsInline
                     preload="auto"
-                />
+                >
+                    <track
+                      src={vttUrl}
+                      kind="subtitles"
+                      label="中文"
+                      srcLang="zh"
+                      default
+                    />
+                </video>
              </div>
 
              {/* 音频元素 - 始终存在，始终隐藏 (使用自定义 UI) */}

@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { Server, HardDrive } from 'lucide-react';
+import { Server, HardDrive, Bot, Users } from 'lucide-react';
 import { SystemStatusTab } from '../components/SystemStatusTab';
 import { StoragePathsTab } from '../components/StoragePathsTab';
+import { LLMConfigCard } from '../components/LLMConfigCard';
+import { TeamsTab } from '../components/TeamsTab';
 
-type TabType = 'status' | 'storage';
+type TabType = 'status' | 'storage' | 'teams' | 'llm';
 
 export const SettingsPage = () => {
   const [activeTab, setActiveTab] = useState<TabType>('status');
@@ -11,6 +13,8 @@ export const SettingsPage = () => {
   const tabs = [
     { id: 'status' as TabType, label: '系统状态', icon: Server },
     { id: 'storage' as TabType, label: '存储路径', icon: HardDrive },
+    { id: 'teams' as TabType, label: '球队名单', icon: Users },
+    { id: 'llm' as TabType, label: 'AI 模型', icon: Bot },
   ];
 
   return (
@@ -48,6 +52,8 @@ export const SettingsPage = () => {
       <div className="min-h-[400px]">
         {activeTab === 'status' && <SystemStatusTab />}
         {activeTab === 'storage' && <StoragePathsTab />}
+        {activeTab === 'teams' && <TeamsTab />}
+        {activeTab === 'llm' && <LLMConfigCard />}
       </div>
     </div>
   );

@@ -25,19 +25,37 @@ def create_model():
     sys.stderr.write(f"[Worker] Using device={device}, compute_type={compute_type}\n")
     return WhisperModel(MODEL_PATH, device=device, compute_type=compute_type)
 
-def transcribe_with_model(model: WhisperModel, file_path: str):
+def transcribe_with_model(model: WhisperModel, file_path: str, total_duration: float = 0, on_progress=None, options=None):
+    """total_duration: 音频总时长(秒)，用于计算进度。on_progress(req_id, progress_pct) 每段后可选调用。"""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
+    opts = options or {}
+    condition_on_previous_text = opts.get("condition_on_previous_text")
+    transcribe_kwargs = {
+        "beam_size": 5,
+        "language": opts.get("language"),
+        "vad_filter": True,
+        "vad_parameters": {
+            "min_silence_duration_ms": 200,
+            "speech_pad_ms": 80
+        },
+        "word_timestamps": True,
+        "task": opts.get("task", "transcribe"),
+        "initial_prompt": opts.get("initial_prompt") or "",
+        "condition_on_previous_text": True if condition_on_previous_text is None else condition_on_previous_text
+    }
+    if opts.get("compression_ratio_threshold") is not None:
+        transcribe_kwargs["compression_ratio_threshold"] = opts.get("compression_ratio_threshold")
+
     segments, info = model.transcribe(
         file_path,
-        beam_size=5,
-        language="zh",
-        vad_filter=True
+        **transcribe_kwargs
     )
 
     result_segments = []
     full_text = ""
+    last_pct = -1
 
     for segment in segments:
         result_segments.append({
@@ -46,6 +64,12 @@ def transcribe_with_model(model: WhisperModel, file_path: str):
             "text": segment.text
         })
         full_text += segment.text
+
+        if on_progress and total_duration > 0:
+            pct = min(100.0, round((segment.end / total_duration) * 100, 1))
+            if pct > last_pct:
+                last_pct = pct
+                on_progress(pct)
 
     return {
         "language": info.language,
@@ -88,16 +112,31 @@ def run_server():
             payload = json.loads(line)
             audio_file = payload.get("audio_file")
             req_id = payload.get("id")
+            total_duration = float(payload.get("duration") or 0)
             if not audio_file:
                 raise ValueError("audio_file is required")
 
-            result = transcribe_with_model(model, audio_file)
-            response = {"id": req_id, "result": result}
-        except Exception as e:
-            response = {"id": payload.get("id") if payload else None, "error": str(e)}
+            def send_progress(pct):
+                msg = {"type": "progress", "id": req_id, "progress_pct": pct}
+                print(json.dumps(msg, ensure_ascii=False), flush=True)
 
-        print(json.dumps(response, ensure_ascii=False))
-        sys.stdout.flush()
+            result = transcribe_with_model(
+                model, audio_file,
+                total_duration=total_duration,
+                on_progress=send_progress if total_duration > 0 else None,
+                options={
+                    "initial_prompt": payload.get("initial_prompt", ""),
+                    "task": payload.get("task", "transcribe"),
+                    "language": payload.get("language"),
+                    "condition_on_previous_text": payload.get("condition_on_previous_text", True),
+                    "compression_ratio_threshold": payload.get("compression_ratio_threshold")
+                }
+            )
+            response = {"type": "result", "id": req_id, "result": result}
+        except Exception as e:
+            response = {"type": "result", "id": payload.get("id") if payload else None, "error": str(e)}
+
+        print(json.dumps(response, ensure_ascii=False), flush=True)
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "--server":

@@ -1,7 +1,8 @@
 import React from 'react';
 import { AlertCircle, ExternalLink, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { DuplicateFileInfo } from '../lib/api';
+import { DuplicateFileInfo, Project } from '../lib/api';
+import { getProjectStatusText } from '../lib/status';
 
 interface DuplicateFileDialogProps {
   duplicate: DuplicateFileInfo;
@@ -19,19 +20,6 @@ export const DuplicateFileDialog: React.FC<DuplicateFileDialogProps> = ({
   const handleViewProject = () => {
     navigate(`/projects/${duplicate.id}`);
     onCancel();
-  };
-
-  const getStatusText = (status: string) => {
-    const statusMap: Record<string, string> = {
-      pending: '等待中',
-      extracting: '提取音频',
-      ready_to_transcribe: '准备转写',
-      transcribing: '转写中',
-      processing: '处理中',
-      completed: '已完成',
-      error: '错误'
-    };
-    return statusMap[status] || status;
   };
 
   const getStatusColor = (status: string) => {
@@ -83,7 +71,7 @@ export const DuplicateFileDialog: React.FC<DuplicateFileDialogProps> = ({
             <div>
               <div className="text-xs text-gray-500 mb-1">状态</div>
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(duplicate.status)}`}>
-                {getStatusText(duplicate.status)}
+                {getProjectStatusText(duplicate.status as Project['status'], 'short')}
               </span>
             </div>
             <div>

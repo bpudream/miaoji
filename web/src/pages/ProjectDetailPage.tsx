@@ -7,12 +7,14 @@ import { SummaryPanel } from '../components/SummaryPanel';
 import { TranscriptionPanel } from '../components/TranscriptionResult';
 import { MediaPlayerPanel, MediaPlayerRef } from '../components/MediaPlayer';
 import { updateProjectName } from '../lib/api';
+import { getProjectStatusText } from '../lib/status';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const { currentProject, isLoading, error } = useAppStore();
   const timerRef = useRef<NodeJS.Timeout>();
   const isPollingRef = useRef(false);
+  const hasInitializedPollingRef = useRef(false);
 
   // 记录进入转写状态的时间
   const transcriptionStartTimeRef = useRef<number | null>(null);
@@ -30,21 +32,30 @@ export const ProjectDetailPage = () => {
 
   // 动态计算下一次轮询间隔
   const getNextPollInterval = useCallback(() => {
-    // 如果不是转写状态，或者没有时长信息，或者还没开始计时，使用默认短间隔
-    if (useAppStore.getState().currentProject?.status !== 'transcribing' ||
-        !useAppStore.getState().currentProject?.duration ||
+    const project = useAppStore.getState().currentProject;
+    if (!project) return 5000;
+
+    const status = project.status;
+    if (status === 'completed' || status === 'error') return 0;
+
+    // 非关键状态降低频率，避免不必要的请求
+    if (status === 'pending' || status === 'ready_to_transcribe') return 8000;
+    if (status === 'extracting' || status === 'processing') return 3000;
+
+    // 转写状态：根据时长动态调整
+    if (status !== 'transcribing' ||
+        !project.duration ||
         !transcriptionStartTimeRef.current) {
-      return 1000;
+      return 3000;
     }
 
-    const project = useAppStore.getState().currentProject!;
     const elapsed = (Date.now() - transcriptionStartTimeRef.current) / 1000;
     const estimatedTotal = project.duration! * TRANSCRIPTION_RATIO;
     const remaining = Math.max(0, estimatedTotal - elapsed);
 
     if (remaining > 20) return 5000; // 还早，5秒一次
     if (remaining > 10) return 2000; // 快了，2秒一次
-    return 500; // 冲刺阶段，0.5秒一次
+    return 1000; // 冲刺阶段，1秒一次
   }, []);
 
   // 使用 ref 保存最新的 loadProject，避免闭包问题
@@ -52,6 +63,8 @@ export const ProjectDetailPage = () => {
   useEffect(() => {
     loadProjectRef.current = useAppStore.getState().loadProject;
   });
+
+  const [pollingEpoch, setPollingEpoch] = useState(0);
 
   useEffect(() => {
     if (!id) return;
@@ -65,6 +78,7 @@ export const ProjectDetailPage = () => {
 
     // 设置轮询：在处理过程中持续轮询
     isPollingRef.current = true;
+    hasInitializedPollingRef.current = true;
 
     // 重置开始时间
     transcriptionStartTimeRef.current = null;
@@ -76,6 +90,14 @@ export const ProjectDetailPage = () => {
       }
 
       const interval = getNextPollInterval();
+      if (interval <= 0) {
+        isPollingRef.current = false;
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = undefined;
+        }
+        return;
+      }
       // console.log(`[Poll] Next poll in ${interval}ms`);
 
       timerRef.current = setTimeout(async () => {
@@ -101,7 +123,7 @@ export const ProjectDetailPage = () => {
         timerRef.current = undefined;
       }
     };
-  }, [id, getNextPollInterval]); // ✅ 只依赖 id 和 getNextPollInterval
+  }, [id, getNextPollInterval, pollingEpoch]); // ✅ 允许外部触发重启轮询
 
   // ... (Rest of the component)
 
@@ -119,6 +141,17 @@ export const ProjectDetailPage = () => {
           timerRef.current = undefined;
         }
       }
+    }
+  }, [currentProject, id]);
+
+  // 当任务从 completed/error 重新进入处理中时，重启轮询
+  useEffect(() => {
+    if (!hasInitializedPollingRef.current) return;
+    if (!currentProject || String(currentProject.id) !== id) return;
+    const status = currentProject.status;
+    const isFinal = status === 'completed' || status === 'error';
+    if (!isFinal && !isPollingRef.current) {
+      setPollingEpoch((v) => v + 1);
     }
   }, [currentProject, id]);
 
@@ -142,19 +175,6 @@ export const ProjectDetailPage = () => {
   if (isLoading && !currentProject) return <div className="p-8 text-center">加载中...</div>;
   if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
   if (!currentProject) return <div className="p-8 text-center">项目不存在</div>;
-
-  const getStatusText = (status: string) => {
-    const statusMap: Record<string, string> = {
-      pending: '等待中',
-      extracting: '提取音频',
-      ready_to_transcribe: '准备转写',
-      transcribing: '转写中',
-      processing: '处理中',
-      completed: '已完成',
-      error: '错误'
-    };
-    return statusMap[status] || status;
-  };
 
   const statusColor = {
     completed: 'text-green-600 bg-green-50 border-green-200',
@@ -292,7 +312,7 @@ export const ProjectDetailPage = () => {
                   {['processing', 'extracting', 'transcribing', 'ready_to_transcribe'].includes(currentProject.status) && (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   )}
-                  {getStatusText(currentProject.status)}
+                  {getProjectStatusText(currentProject.status, 'short')}
                 </span>
               </div>
             </div>

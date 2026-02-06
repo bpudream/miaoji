@@ -27,6 +27,8 @@ export const API_URL = getApiUrl();
 
 export const api = axios.create({
   baseURL: API_URL,
+  // 默认超时适配长总结生成（云端 API 可能延迟）
+  timeout: 120000,
 });
 
 // 注意：后端地址现在从环境变量读取，不再支持动态修改
@@ -39,12 +41,14 @@ export interface Project {
   display_name?: string | null; // 用户自定义的显示名称
   status: 'pending' | 'extracting' | 'ready_to_transcribe' | 'transcribing' | 'processing' | 'completed' | 'error';
   created_at: string;
+  scenario?: string | null;
   duration?: number; // 音频时长 (秒)
   mime_type?: string; // MIME类型，用于判断音频/视频
   audio_path?: string; // 提取的音频文件路径
   filepath?: string; // 文件存储路径
   size?: number; // 文件大小（字节）
   summary_count?: number; // 总结数量
+  transcription_progress?: number | null; // 转写进度 0–100，仅 status=transcribing 时有值
   transcription?: {
     content: any;
     format: string;
@@ -140,6 +144,78 @@ export const getProject = async (id: string): Promise<Project> => {
   return response.data;
 };
 
+export interface Team {
+  id: string;
+  name: string;
+  roster_text: string | null;
+  starting_lineup_text: string | null;
+  created_at: string;
+}
+
+export const getTeams = async (): Promise<Team[]> => {
+  const response = await api.get<Team[]>('/teams');
+  return response.data;
+};
+
+export const createTeam = async (body: {
+  name: string;
+  roster_text?: string | null;
+  starting_lineup_text?: string | null;
+}): Promise<Team> => {
+  const response = await api.post<Team>('/teams', body);
+  return response.data;
+};
+
+export const updateTeam = async (
+  id: string,
+  body: { name?: string; roster_text?: string | null; starting_lineup_text?: string | null }
+): Promise<Team> => {
+  const response = await api.put<Team>(`/teams/${id}`, body);
+  return response.data;
+};
+
+export const deleteTeam = async (id: string): Promise<void> => {
+  await api.delete(`/teams/${id}`);
+};
+
+export type RosterMode = 'none' | 'full' | 'starting';
+
+export interface StartTranscriptionOptions {
+  scenario?: string;
+  meta?: {
+    team_home_id?: string;
+    team_away_id?: string;
+    keywords?: string;
+    roster_mode?: RosterMode;
+    selected_players?: string[];
+  };
+}
+
+export const startTranscription = async (
+  id: string,
+  options?: StartTranscriptionOptions
+): Promise<{ status: string; message?: string }> => {
+  const response = await api.post<{ status: string; message?: string }>(`/projects/${id}/transcribe`, options ?? {});
+  return response.data;
+};
+
+export const getTranscribePreview = async (
+  projectId: string,
+  options: {
+    scenario?: string;
+    meta?: {
+      team_home_id?: string;
+      team_away_id?: string;
+      keywords?: string;
+      roster_mode?: RosterMode;
+      selected_players?: string[];
+    };
+  }
+): Promise<{ prompt: string; truncated?: boolean; keywords_truncated?: boolean }> => {
+  const response = await api.post<{ prompt: string; truncated?: boolean; keywords_truncated?: boolean }>(`/projects/${projectId}/transcribe-preview`, options);
+  return response.data;
+};
+
 export const getProjects = async (page = 1, pageSize = 10, status?: string): Promise<ProjectsResponse> => {
   const response = await api.get<ProjectsResponse>('/projects', {
     params: { page, pageSize, status }
@@ -178,11 +254,11 @@ export const getSummary = async (id: string, mode?: SummaryMode): Promise<Summar
     return response.data;
 };
 
-export type ExportFormat = 'txt' | 'json' | 'srt';
+export type ExportFormat = 'txt' | 'json' | 'srt' | 'vtt' | 'srt_translated' | 'srt_bilingual';
 
-export const exportTranscription = async (id: string, format: ExportFormat) => {
+export const exportTranscription = async (id: string, format: ExportFormat, language?: string) => {
   const response = await api.get<Blob>(`/projects/${id}/export`, {
-    params: { format },
+    params: { format, ...(language ? { language } : {}) },
     responseType: 'blob',
   });
 
@@ -199,6 +275,26 @@ export const exportTranscription = async (id: string, format: ExportFormat) => {
     blob: response.data,
     filename,
   };
+};
+
+export interface TranslationResponse {
+  id: number;
+  transcription_id: number;
+  language: string;
+  content: { segments: Array<{ start?: number; end?: number; text: string }> };
+  created_at: string;
+}
+
+export const requestTranslation = async (id: string, targetLanguage: string) => {
+  const response = await api.post(`/projects/${id}/translate`, { target_language: targetLanguage });
+  return response.data;
+};
+
+export const getTranslation = async (id: string, language: string): Promise<TranslationResponse> => {
+  const response = await api.get<TranslationResponse>(`/projects/${id}/translations`, {
+    params: { language },
+  });
+  return response.data;
 };
 
 export const updateTranscription = async (id: string, segments: any[]): Promise<void> => {
@@ -300,6 +396,36 @@ export const testBackendConnection = async (): Promise<{ success: boolean; messa
       message: error.code === 'ECONNABORTED' ? '连接超时' : '连接失败',
     };
   }
+};
+
+// ========== LLM 设置 API ==========
+export type LLMProviderType = 'ollama' | 'openai';
+
+export interface LLMSettings {
+  provider: LLMProviderType;
+  base_url?: string;
+  model_name?: string;
+  api_key_set?: boolean;
+}
+
+export const getLLMSettings = async (): Promise<LLMSettings> => {
+  const response = await api.get<LLMSettings>('/settings/llm');
+  return response.data;
+};
+
+export const updateLLMSettings = async (data: {
+  provider: LLMProviderType;
+  base_url?: string;
+  model_name?: string;
+  api_key?: string;
+}): Promise<{ status: string; config: LLMSettings }> => {
+  const response = await api.post<{ status: string; config: LLMSettings }>('/settings/llm', data);
+  return response.data;
+};
+
+export const testLLMConnection = async (): Promise<{ success: boolean; message: string }> => {
+  const response = await api.post<{ success: boolean; message: string }>('/settings/llm/test');
+  return response.data;
 };
 
 // ========== 存储路径管理 API ==========

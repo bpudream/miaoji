@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAppStore } from '../../stores/useAppStore';
 import { FileText, Clock, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { Project } from '../../lib/api';
+import { getProjectStatusText } from '../../lib/status';
 
 // 这是一个简化的移动端列表项组件，避免重复代码
 const ProjectCard = ({ project }: { project: Project }) => {
@@ -19,19 +20,6 @@ const ProjectCard = ({ project }: { project: Project }) => {
         }
     };
 
-    const getStatusText = (status: string) => {
-        const statusMap: Record<string, string> = {
-            pending: '等待中',
-            extracting: '提取音频',
-            ready_to_transcribe: '准备转写',
-            transcribing: '转写中',
-            processing: '处理中',
-            completed: '已完成',
-            error: '错误'
-        };
-        return statusMap[status] || status;
-    };
-
     return (
         <Link to={`/projects/${project.id}`} className="block bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-3 active:bg-gray-50">
             <div className="flex items-start justify-between mb-3">
@@ -45,7 +33,7 @@ const ProjectCard = ({ project }: { project: Project }) => {
             <div className="flex items-center justify-between text-xs text-gray-500">
                 <span className="flex items-center gap-1">
                     {getStatusIcon(project.status)}
-                    <span className="font-medium">{getStatusText(project.status)}</span>
+                    <span className="font-medium">{getProjectStatusText(project.status, 'short')}</span>
                 </span>
                 <span>{new Date(project.created_at).toLocaleDateString()}</span>
             </div>

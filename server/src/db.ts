@@ -140,6 +140,7 @@ const initDb = () => {
     db.exec('DROP TABLE IF EXISTS transcriptions');
     db.exec('DROP TABLE IF EXISTS media_files');
     db.exec('DROP TABLE IF EXISTS media_files_uuid_migrated');
+    db.exec('DROP TABLE IF EXISTS teams');
   }
 
   // 检查是否需要迁移到UUID
@@ -164,13 +165,15 @@ const initDb = () => {
       filepath TEXT NOT NULL,
       audio_path TEXT,            -- 提取后的音频路径 (16kHz WAV)
       original_name TEXT,
-      display_name TEXT,          -- 用户自定义的显示名称
-      file_hash TEXT,             -- 文件MD5哈希值，用于检测重复文件
+      display_name TEXT,         -- 用户自定义的显示名称
+      file_hash TEXT,            -- 文件MD5哈希值，用于检测重复文件
       size INTEGER,
       mime_type TEXT,
+      scenario TEXT,
+      transcribe_meta TEXT,       -- JSON: { team_home_id?, team_away_id?, keywords? }
       status TEXT DEFAULT 'pending', -- pending, extracting, ready_to_transcribe, transcribing, transcribed, completed, error
-      error_message TEXT,         -- 错误信息
-      failed_stage TEXT,          -- 失败阶段
+      error_message TEXT,
+      failed_stage TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -190,7 +193,10 @@ const initDb = () => {
     'failed_stage TEXT',
     'duration REAL', // 添加 duration 字段
     'display_name TEXT', // 添加 display_name 字段
-    'file_hash TEXT' // 添加 file_hash 字段
+    'file_hash TEXT', // 添加 file_hash 字段
+    'transcription_progress REAL', // 转写进度 0–100，仅 transcribing 时有值
+    'scenario TEXT',
+    'transcribe_meta TEXT' // JSON: { team_home_id?, team_away_id?, keywords? }
   ];
 
   if (!isTest) {
@@ -231,6 +237,23 @@ const initDb = () => {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS translations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transcription_id INTEGER NOT NULL,
+      language TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (transcription_id) REFERENCES transcriptions(id),
+      UNIQUE(transcription_id, language)
+    );
+  `);
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_translations_transcription_id ON translations(transcription_id)');
+  } catch (e: any) {
+    if (!e.message?.includes('already exists')) throw e;
+  }
+
   // 配置表
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
@@ -239,6 +262,27 @@ const initDb = () => {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // 球队名单表（转写提示词增强：足球场景选队 + 名单注入）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS teams (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      roster_text TEXT,
+      starting_lineup_text TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  if (!isTest) {
+    try {
+      db.exec('ALTER TABLE teams ADD COLUMN starting_lineup_text TEXT');
+    } catch (e: any) {
+      if (!e.message?.includes('duplicate column name')) {
+        // ignore
+      }
+    }
+  }
 
   // 存储路径配置表
   db.exec(`
@@ -268,6 +312,18 @@ const initDb = () => {
       const defaultBackendPort = db.prepare('SELECT value FROM settings WHERE key = ?').get('backend_port');
       if (!defaultBackendPort) {
         db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('backend_port', '3000');
+      }
+
+      // 初始化默认 LLM 配置（若不存在）
+      const existingLLM = db.prepare('SELECT value FROM settings WHERE key = ?').get('llm_config');
+      if (!existingLLM) {
+        const defaultLLM = JSON.stringify({
+          provider: 'ollama',
+          base_url: 'http://localhost:11434',
+          model_name: 'qwen3:14b',
+        });
+        db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('llm_config', defaultLLM);
+        console.log('[DB] Initialized default llm_config (ollama)');
       }
 
       // 初始化默认存储路径（如果表为空）

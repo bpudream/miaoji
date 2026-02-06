@@ -9,13 +9,17 @@ import { randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import db from './db';
 import queue from './queue';
-import { ollamaService, SummaryMode } from './services/ollama';
+import { getPrompts, SummaryMode } from './ai/prompts';
+import { LLMFactory } from './ai/factory';
+import { getLLMConfig, getLLMConfigForAPI, setLLMConfig } from './services/config';
 import { StorageService } from './services/storage';
 import { ProjectPathService } from './services/projectPath';
 import { calculateFileHash } from './services/fileHash';
 import { DependencyChecker } from './services/dependencyCheck';
 import { createLoggerConfig, logger } from './utils/logger';
 import { startLogCleanupScheduler } from './utils/logCleanup';
+import { buildSrt, buildVtt } from './utils/subtitle';
+import { normalizeScenario, buildPrompt, buildPromptWithMeta, type ScenarioKey } from './services/whisperPrompt';
 
 // 从环境变量读取配置
 const BACKEND_PORT = parseInt(process.env.BACKEND_PORT || '3000', 10);
@@ -287,13 +291,57 @@ export const buildApp = () => {
     };
   });
 
+  // ========== LLM 设置 API ==========
+  // 获取 LLM 配置（脱敏，不含 api_key 明文）
+  fastify.get('/api/settings/llm', async (request, reply) => {
+    const config = getLLMConfigForAPI();
+    return config ?? { provider: 'ollama', base_url: 'http://localhost:11434', model_name: 'qwen3:14b', api_key_set: false };
+  });
+
+  // 更新 LLM 配置
+  fastify.post('/api/settings/llm', async (request, reply) => {
+    const body = request.body as { provider?: string; base_url?: string; model_name?: string; api_key?: string };
+    const provider = body.provider as 'ollama' | 'openai' | undefined;
+    if (!provider || !['ollama', 'openai'].includes(provider)) {
+      return reply.code(400).send({ error: 'Invalid or missing provider. Must be ollama or openai.' });
+    }
+    const current = getLLMConfig();
+    if (provider === 'openai' && !(current?.api_key) && !(body.api_key?.trim())) {
+      return reply.code(400).send({ error: 'API Key is required for OpenAI/DeepSeek provider.' });
+    }
+    const payload: Parameters<typeof setLLMConfig>[0] = { provider };
+    if (body.base_url !== undefined) payload.base_url = body.base_url;
+    if (body.model_name !== undefined) payload.model_name = body.model_name;
+    if (body.api_key !== undefined) payload.api_key = body.api_key;
+    setLLMConfig(payload);
+    const updated = getLLMConfigForAPI();
+    return { status: 'success', config: updated };
+  });
+
+  // 测试 LLM 连接
+  fastify.post('/api/settings/llm/test', async (request, reply) => {
+    const config = getLLMConfig();
+    const provider = config ? LLMFactory.create(config) : null;
+    if (!provider) {
+      return reply.code(400).send({ success: false, message: '未配置有效的 LLM，请先选择 Provider 并填写必要信息。' });
+    }
+    try {
+      const ok = await provider.checkHealth();
+      return { success: ok, message: ok ? '连接成功' : '连接失败，请检查地址与 API Key。' };
+    } catch (err: any) {
+      request.log.error(err);
+      return reply.code(200).send({ success: false, message: err?.message || '连接测试失败' });
+    }
+  });
+
   // 继续上传重复文件的路由
   fastify.post('/api/upload/continue', async (req, reply) => {
-    const { temp_file_path, file_hash, mime_type, original_filename } = req.body as {
+    const { temp_file_path, file_hash, mime_type, original_filename, scenario } = req.body as {
       temp_file_path: string;
       file_hash: string;
       mime_type?: string;
       original_filename?: string;
+      scenario?: string;
     };
 
     if (!temp_file_path || !file_hash) {
@@ -349,10 +397,21 @@ export const buildApp = () => {
 
     // 插入数据库（使用UUID作为ID，包含file_hash）
     const stmt = db.prepare(`
-      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size, scenario)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(fileId, tempFileName, finalFilePath, originalFilename, finalMimeType, 'pending', file_hash, stats.size);
+    const scenarioKey = (scenario != null && String(scenario).trim() !== '') ? normalizeScenario(scenario) : null;
+    stmt.run(
+      fileId,
+      tempFileName,
+      finalFilePath,
+      originalFilename,
+      finalMimeType,
+      'ready_to_transcribe',
+      file_hash,
+      stats.size,
+      scenarioKey
+    );
 
     try {
       fs.renameSync(temp_file_path, finalFilePath);
@@ -364,8 +423,6 @@ export const buildApp = () => {
 
     // 更新数据库中的文件路径
     db.prepare('UPDATE media_files SET filepath = ? WHERE id = ?').run(finalFilePath, fileId);
-
-    queue.add(fileId, finalFilePath);
 
     return {
       status: 'success',
@@ -384,6 +441,7 @@ export const buildApp = () => {
     }
 
     let forceUpload = false;
+    let scenario: string | null = null;
     let tempFilePath: string | null = null;
     let originalFilename = '';
     let mimetype = '';
@@ -393,11 +451,15 @@ export const buildApp = () => {
       if (typeof req.parts === 'function') {
         const parts = req.parts();
         for await (const part of parts) {
-          if (part.type === 'field' && part.fieldname === 'force_upload') {
+          if (part.type === 'field') {
             const value = part.value;
             const val = typeof value === 'string' ? value : value?.toString?.() ?? '';
-            if (val === 'true' || val === '1') {
-              forceUpload = true;
+            if (part.fieldname === 'force_upload') {
+              if (val === 'true' || val === '1') {
+                forceUpload = true;
+              }
+            } else if (part.fieldname === 'scenario') {
+              scenario = val.trim() || null;
             }
           } else if (part.type === 'file') {
             originalFilename = part.filename || `upload-${Date.now()}`;
@@ -519,11 +581,22 @@ export const buildApp = () => {
     const finalFilePath = ProjectPathService.getOriginalFilePath(storagePath, fileId, ext);
 
     const stmt = db.prepare(`
-      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO media_files (id, filename, filepath, original_name, mime_type, status, file_hash, size, scenario)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const finalFilename = path.basename(tempFilePath);
-    stmt.run(fileId, finalFilename, finalFilePath, originalFilename, mimetype, 'pending', fileHash, stats.size);
+    const scenarioKey = (scenario != null && String(scenario).trim() !== '') ? normalizeScenario(scenario) : null;
+    stmt.run(
+      fileId,
+      finalFilename,
+      finalFilePath,
+      originalFilename,
+      mimetype,
+      'ready_to_transcribe',
+      fileHash,
+      stats.size,
+      scenarioKey
+    );
 
     try {
       fs.renameSync(tempFilePath, finalFilePath);
@@ -533,7 +606,6 @@ export const buildApp = () => {
     }
 
     db.prepare('UPDATE media_files SET filepath = ? WHERE id = ?').run(finalFilePath, fileId);
-    queue.add(fileId, finalFilePath);
 
     return {
       status: 'success',
@@ -703,6 +775,7 @@ export const buildApp = () => {
       filename: file.filename,
       original_name: file.original_name,
       display_name: file.display_name || null, // ✅ 添加 display_name 字段
+      scenario: file.scenario || null,
       status: file.status,
       created_at: file.created_at,
       duration: file.duration, // ✅ 添加 duration 字段
@@ -711,8 +784,232 @@ export const buildApp = () => {
       filepath: file.filepath, // ✅ 添加 filepath 字段
       size: fileSize, // ✅ 添加文件大小
       summary_count: summaryCount?.count || 0, // ✅ 添加总结数量
+      transcription_progress: file.transcription_progress != null ? file.transcription_progress : null, // 转写中时 0–100
       transcription
     };
+  });
+
+  // 手动触发转写（请求体可带 scenario、meta：主队/客队/自定义关键词）
+  fastify.post('/api/projects/:id/transcribe', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as {
+      scenario?: string;
+      meta?: {
+        team_home_id?: string;
+        team_away_id?: string;
+        keywords?: string;
+        roster_mode?: 'none' | 'full' | 'starting';
+        selected_players?: string[];
+      };
+    }) || {};
+
+    const fileStmt = db.prepare('SELECT * FROM media_files WHERE id = ?');
+    const file = fileStmt.get(id) as any;
+
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    if (['extracting', 'transcribing', 'processing'].includes(file.status)) {
+      return reply.code(400).send({ error: 'Project is already processing' });
+    }
+
+    if (!file.filepath) {
+      return reply.code(400).send({ error: 'Project file path not found' });
+    }
+
+    if (!['ready_to_transcribe', 'pending', 'error', 'completed'].includes(file.status)) {
+      return reply.code(400).send({ error: 'Project is not ready for transcription' });
+    }
+
+    const meta = body.meta;
+    const teamHomeId = meta?.team_home_id?.trim() || null;
+    const teamAwayId = meta?.team_away_id?.trim() || null;
+    const keywords = meta?.keywords != null ? String(meta.keywords).trim() : null;
+    const rosterMode = meta?.roster_mode === 'none' || meta?.roster_mode === 'full' || meta?.roster_mode === 'starting'
+      ? meta.roster_mode
+      : undefined;
+    const selectedPlayers = Array.isArray(meta?.selected_players)
+      ? meta?.selected_players.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim())
+      : undefined;
+
+    if (teamHomeId || teamAwayId) {
+      const teamStmt = db.prepare('SELECT id FROM teams WHERE id = ?');
+      if (teamHomeId && !teamStmt.get(teamHomeId)) {
+        return reply.code(400).send({ error: 'Team not found', details: 'team_home_id' });
+      }
+      if (teamAwayId && !teamStmt.get(teamAwayId)) {
+        return reply.code(400).send({ error: 'Team not found', details: 'team_away_id' });
+      }
+    }
+
+    const transcribeMeta =
+      teamHomeId || teamAwayId || keywords || rosterMode || (selectedPlayers && selectedPlayers.length > 0)
+        ? JSON.stringify({
+            team_home_id: teamHomeId || undefined,
+            team_away_id: teamAwayId || undefined,
+            keywords: keywords || undefined,
+            roster_mode: rosterMode,
+            selected_players: selectedPlayers && selectedPlayers.length > 0 ? selectedPlayers : undefined
+          })
+        : null;
+
+    const scenarioValue =
+      body.scenario != null && String(body.scenario).trim() !== ''
+        ? normalizeScenario(body.scenario)
+        : (file.scenario ?? null);
+
+    db.prepare(`
+      UPDATE media_files
+      SET scenario = ?, transcribe_meta = ?, status = 'pending', error_message = NULL, failed_stage = NULL, transcription_progress = NULL
+      WHERE id = ?
+    `).run(scenarioValue, transcribeMeta, id);
+
+    // 清理旧的转写与总结，避免历史数据干扰
+    db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
+    db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
+
+    queue.add('transcribe', { id: file.id, filepath: file.filepath });
+
+    return { status: 'success', message: 'Task queued for transcription' };
+  });
+
+  // 转写提示词预览（与 transcribe 使用相同逻辑，仅返回拼接后的 prompt）
+  fastify.post('/api/projects/:id/transcribe-preview', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as {
+      scenario?: string;
+      meta?: {
+        team_home_id?: string;
+        team_away_id?: string;
+        keywords?: string;
+        roster_mode?: 'none' | 'full' | 'starting';
+        selected_players?: string[];
+      };
+    }) || {};
+
+    const file = db.prepare('SELECT original_name, display_name FROM media_files WHERE id = ?').get(id) as
+      | { original_name?: string; display_name?: string | null }
+      | undefined;
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    const scenarioKey = normalizeScenario(body.scenario) as ScenarioKey;
+    const filename = (file.display_name && String(file.display_name).trim()) || (file.original_name && String(file.original_name).trim()) || '';
+
+    const meta = body.meta;
+    const teamHomeId = meta?.team_home_id?.trim();
+    const teamAwayId = meta?.team_away_id?.trim();
+    const keywords = meta?.keywords != null ? String(meta.keywords).trim() : undefined;
+    const rosterMode = meta?.roster_mode === 'none' || meta?.roster_mode === 'full' || meta?.roster_mode === 'starting'
+      ? meta.roster_mode
+      : 'full';
+    const selectedPlayers = Array.isArray(meta?.selected_players)
+      ? meta?.selected_players.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim())
+      : undefined;
+
+    const rosterParts: string[] = [];
+    let teamHomeName: string | undefined;
+    let teamAwayName: string | undefined;
+
+    const useRoster = rosterMode !== 'none';
+    const useStarting = rosterMode === 'starting';
+
+    if (teamHomeId && useRoster) {
+      const row = db.prepare('SELECT name, roster_text FROM teams WHERE id = ?').get(teamHomeId) as
+        | { name: string; roster_text: string | null }
+        | undefined;
+      if (row) {
+        teamHomeName = row.name;
+        if (!useStarting && row.roster_text?.trim()) rosterParts.push(row.roster_text.trim());
+      }
+    }
+    if (teamAwayId && useRoster) {
+      const row = db.prepare('SELECT name, roster_text FROM teams WHERE id = ?').get(teamAwayId) as
+        | { name: string; roster_text: string | null }
+        | undefined;
+      if (row) {
+        teamAwayName = row.name;
+        if (!useStarting && row.roster_text?.trim()) rosterParts.push(row.roster_text.trim());
+      }
+    }
+    if (useStarting && selectedPlayers && selectedPlayers.length > 0) {
+      rosterParts.push(selectedPlayers.join(', '));
+    }
+
+    const roster_combined =
+      rosterParts.length > 0
+        ? rosterParts.join(', ').replace(/\s+/g, ' ').replace(/,+/g, ',').trim()
+        : undefined;
+
+    const buildPromptMeta: { team_home_name?: string; team_away_name?: string; roster_combined?: string; keywords?: string } | undefined =
+      teamHomeName || teamAwayName || roster_combined || keywords
+        ? {}
+        : undefined;
+    if (buildPromptMeta) {
+      if (teamHomeName) buildPromptMeta.team_home_name = teamHomeName;
+      if (teamAwayName) buildPromptMeta.team_away_name = teamAwayName;
+      if (roster_combined) buildPromptMeta.roster_combined = roster_combined;
+      if (keywords) buildPromptMeta.keywords = keywords;
+    }
+
+    const result = buildPromptWithMeta(filename, scenarioKey, buildPromptMeta);
+    return reply.send({ prompt: result.prompt, truncated: result.truncated, keywords_truncated: result.keywords_truncated });
+  });
+
+  // ========== 球队名单 API（转写提示词增强） ==========
+
+  fastify.get('/api/teams', async (_request, reply) => {
+    const rows = db.prepare('SELECT id, name, roster_text, starting_lineup_text, created_at FROM teams ORDER BY created_at DESC').all() as any[];
+    return reply.send(rows);
+  });
+
+  fastify.post('/api/teams', async (request, reply) => {
+    const body = request.body as { name?: string; roster_text?: string; starting_lineup_text?: string };
+    const name = body.name != null ? String(body.name).trim() : '';
+    const rosterText = body.roster_text != null ? String(body.roster_text).trim() : null;
+    const startingLineupText = body.starting_lineup_text != null ? String(body.starting_lineup_text).trim() : null;
+    if (!name) {
+      return reply.code(400).send({ error: 'name is required' });
+    }
+    const id = randomUUID();
+    db.prepare('INSERT INTO teams (id, name, roster_text, starting_lineup_text) VALUES (?, ?, ?, ?)').run(id, name, rosterText, startingLineupText);
+    const row = db.prepare('SELECT id, name, roster_text, starting_lineup_text, created_at FROM teams WHERE id = ?').get(id) as any;
+    return reply.code(201).send(row);
+  });
+
+  fastify.put('/api/teams/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { name?: string; roster_text?: string; starting_lineup_text?: string };
+    const existing = db.prepare('SELECT id FROM teams WHERE id = ?').get(id);
+    if (!existing) {
+      return reply.code(404).send({ error: 'Team not found' });
+    }
+    const name = body.name != null ? String(body.name).trim() : undefined;
+    const rosterText = body.roster_text !== undefined ? String(body.roster_text).trim() : undefined;
+    const startingLineupText = body.starting_lineup_text !== undefined ? String(body.starting_lineup_text).trim() : undefined;
+    if (name !== undefined) {
+      if (!name) return reply.code(400).send({ error: 'name cannot be empty' });
+      db.prepare('UPDATE teams SET name = ? WHERE id = ?').run(name, id);
+    }
+    if (rosterText !== undefined) {
+      db.prepare('UPDATE teams SET roster_text = ? WHERE id = ?').run(rosterText || null, id);
+    }
+    if (startingLineupText !== undefined) {
+      db.prepare('UPDATE teams SET starting_lineup_text = ? WHERE id = ?').run(startingLineupText || null, id);
+    }
+    const row = db.prepare('SELECT id, name, roster_text, starting_lineup_text, created_at FROM teams WHERE id = ?').get(id) as any;
+    return reply.send(row);
+  });
+
+  fastify.delete('/api/teams/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = db.prepare('DELETE FROM teams WHERE id = ?').run(id);
+    if (result.changes === 0) {
+      return reply.code(404).send({ error: 'Team not found' });
+    }
+    return reply.send({ status: 'success' });
   });
 
   // 更新项目显示名称
@@ -792,34 +1089,43 @@ export const buildApp = () => {
     }
 
     try {
-      // 2. 检查 Ollama 服务
-      const isRunning = await ollamaService.ensureRunning();
-      if (!isRunning) {
-        return reply.code(503).send({ error: 'Ollama service is not available. Please make sure Ollama is running.' });
+      // 2. 获取当前 LLM 配置并创建 Provider
+      const llmConfig = getLLMConfig();
+      const provider = llmConfig ? LLMFactory.create(llmConfig) : null;
+      if (!llmConfig || !provider) {
+        return reply.code(503).send({ error: '未配置 LLM。请在设置中选择“本地模型”或“在线模型”并保存。' });
+      }
+      const isHealthy = await provider.checkHealth();
+      if (!isHealthy) {
+        const hint = llmConfig.provider === 'ollama'
+          ? 'Ollama 服务不可用，请确认已启动 Ollama。'
+          : '在线模型连接失败，请检查 API Key 与网络。';
+        return reply.code(503).send({ error: hint });
       }
 
-      // 3. 生成 Prompt
-      const { prompt, system } = ollamaService.getPrompts(fullText, mode);
+      // 3. 生成 Prompt（与 Provider 无关的模板）
+      const { prompt, system } = getPrompts(fullText, mode);
+      const messages = [
+        { role: 'system' as const, content: system },
+        { role: 'user' as const, content: prompt },
+      ];
 
-      // 4. 调用 Ollama (非流式，简单起见)
-      const summaryText = await ollamaService.generate(prompt, system);
+      // 4. 调用当前 Provider 生成总结
+      const summaryText = await provider.chat(messages);
 
-      // 5. 保存/更新到数据库
-      // Remove previous summaries of same mode to keep it clean?
-      // db.prepare('DELETE FROM summaries WHERE media_file_id = ? AND mode = ?').run(id, mode);
-
+      // 5. 保存到数据库（记录当前使用的模型名）
+      const modelLabel = llmConfig.model_name || (llmConfig.provider === 'ollama' ? 'qwen3:14b' : 'openai');
       const insertStmt = db.prepare(`
         INSERT INTO summaries (media_file_id, content, model, mode)
         VALUES (?, ?, ?, ?)
       `);
-      insertStmt.run(id, summaryText, 'qwen3:14b', mode);
+      insertStmt.run(id, summaryText, modelLabel, mode);
 
       return {
         status: 'success',
         summary: summaryText,
-        mode
+        mode,
       };
-
     } catch (error: any) {
       request.log.error(error);
       return reply.code(500).send({ error: 'Failed to generate summary', details: error.message });
@@ -849,6 +1155,38 @@ export const buildApp = () => {
     }
 
     return summary;
+  });
+
+  // 提交翻译任务入队
+  fastify.post('/api/projects/:id/translate', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { target_language = 'en' } = (request.body as { target_language?: string }) ?? {};
+    const file = db.prepare('SELECT id FROM media_files WHERE id = ?').get(id) as { id: string } | undefined;
+    if (!file) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+    const trans = db.prepare('SELECT id FROM transcriptions WHERE media_file_id = ?').get(id);
+    if (!trans) {
+      return reply.code(400).send({ error: 'No transcription available for this project' });
+    }
+    queue.add('translate', { id, target_language });
+    return reply.code(202).send({ status: 'accepted', message: 'Translation task queued', target_language });
+  });
+
+  // 获取某项目的某语言翻译结果
+  fastify.get('/api/projects/:id/translations', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { language = 'en' } = request.query as { language?: string };
+    const trans = db.prepare('SELECT id FROM transcriptions WHERE media_file_id = ?').get(id) as { id: number } | undefined;
+    if (!trans) {
+      return reply.code(404).send({ error: 'Transcription not found' });
+    }
+    const row = db.prepare('SELECT id, transcription_id, language, content, created_at FROM translations WHERE transcription_id = ? AND language = ?').get(trans.id, language) as any;
+    if (!row) {
+      return reply.code(404).send({ error: 'Translation not found for this language' });
+    }
+    const content = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
+    return { id: row.id, transcription_id: row.transcription_id, language: row.language, content, created_at: row.created_at };
   });
 
   const sanitizeFilename = (name: string) => {
@@ -899,16 +1237,6 @@ export const buildApp = () => {
     }
 
     return { parsed, segments, text };
-  };
-
-  const formatSrtTimestamp = (seconds: number) => {
-    const totalMs = Math.round(seconds * 1000);
-    const hours = Math.floor(totalMs / 3_600_000);
-    const minutes = Math.floor((totalMs % 3_600_000) / 60_000);
-    const secs = Math.floor((totalMs % 60_000) / 1000);
-    const ms = totalMs % 1000;
-    const pad = (num: number, len: number) => num.toString().padStart(len, '0');
-    return `${pad(hours, 2)}:${pad(minutes, 2)}:${pad(secs, 2)},${pad(ms, 3)}`;
   };
 
   // 提供媒体文件访问
@@ -970,9 +1298,9 @@ export const buildApp = () => {
 
   fastify.get('/api/projects/:id/export', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { format = 'txt' } = request.query as { format?: string };
+    const { format = 'txt', language = 'en' } = request.query as { format?: string; language?: string };
 
-    const allowedFormats = ['txt', 'json', 'srt'];
+    const allowedFormats = ['txt', 'json', 'srt', 'vtt', 'srt_translated', 'srt_bilingual'];
     if (!allowedFormats.includes(format)) {
       return reply.code(400).send({ error: 'Unsupported export format' });
     }
@@ -1002,27 +1330,51 @@ export const buildApp = () => {
     }
 
     if (format === 'srt') {
-      const usableSegments = segments.length
-        ? segments
-        : [
-            {
-              start: 0,
-              end: Math.max(file.duration ?? 0, text ? text.length / 4 : 5),
-              text: text || '',
-            },
-          ];
-
-      const srt = usableSegments
-        .map((seg: any, index: number) => {
-          const start = formatSrtTimestamp(Number(seg.start) || 0);
-          const end = formatSrtTimestamp(Number(seg.end) || Number(seg.start) + 1);
-          const content = (seg.text || '').trim() || '(空)';
-          return `${index + 1}\n${start} --> ${end}\n${content}\n`;
-        })
-        .join('\n');
-
+      const srt = buildSrt(segments as any[], text, file.duration);
       reply.header('Content-Type', 'application/x-subrip; charset=utf-8');
       reply.header('Content-Disposition', buildContentDisposition(safeBaseName, 'srt', fallbackName));
+      return srt;
+    }
+
+    if (format === 'vtt') {
+      const vtt = buildVtt(segments as any[], text, file.duration);
+      reply.header('Content-Type', 'text/vtt; charset=utf-8');
+      reply.header('Content-Disposition', buildContentDisposition(safeBaseName, 'vtt', fallbackName));
+      return vtt;
+    }
+
+    if (format === 'srt_translated' || format === 'srt_bilingual') {
+      const transRow = db.prepare('SELECT id FROM transcriptions WHERE media_file_id = ?').get(id) as { id: number } | undefined;
+      if (!transRow) {
+        return reply.code(404).send({ error: 'Transcription not found' });
+      }
+      const translation = db.prepare(
+        'SELECT content FROM translations WHERE transcription_id = ? AND language = ?'
+      ).get(transRow.id, language) as { content: string } | undefined;
+      if (!translation) {
+        return reply.code(404).send({ error: 'Translation not found for this language' });
+      }
+      let translatedSegments: any[] = [];
+      try {
+        const parsed = typeof translation.content === 'string' ? JSON.parse(translation.content) : translation.content;
+        translatedSegments = Array.isArray(parsed?.segments) ? parsed.segments : Array.isArray(parsed) ? parsed : [];
+      } catch {
+        translatedSegments = [];
+      }
+
+      const mergedSegments = (segments as any[]).map((seg: any, index: number) => {
+        const translated = translatedSegments[index]?.text ?? '';
+        const textOut = format === 'srt_bilingual'
+          ? `${seg.text || ''}\n${translated || ''}`.trim()
+          : (translated || '').trim();
+        return { start: seg.start, end: seg.end, text: textOut || seg.text || '' };
+      });
+
+      const srt = buildSrt(mergedSegments, text, file.duration);
+      const suffix = format === 'srt_bilingual' ? 'bilingual' : 'translated';
+      const baseNameWithSuffix = `${safeBaseName}.${suffix}`;
+      reply.header('Content-Type', 'application/x-subrip; charset=utf-8');
+      reply.header('Content-Disposition', buildContentDisposition(baseNameWithSuffix, 'srt', fallbackName));
       return srt;
     }
 
@@ -1049,8 +1401,9 @@ export const buildApp = () => {
     }
 
     // 2. 数据库删除
-    // 使用事务确保原子性
+    // 使用事务确保原子性（先删 translations 再删 transcriptions，因 FK 关联）
     const deleteTransaction = db.transaction(() => {
+      db.prepare('DELETE FROM translations WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
       db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
       db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
       db.prepare('DELETE FROM media_files WHERE id = ?').run(id);
@@ -1119,7 +1472,7 @@ export const buildApp = () => {
 
     // 重新加入队列
     // 如果原始文件不存在了，队列处理时会报错，循环进入 error 状态，这是合理的
-    queue.add(file.id, file.filepath);
+    queue.add('transcribe', { id: file.id, filepath: file.filepath });
 
     return { status: 'success', message: 'Task queued for retry' };
   });

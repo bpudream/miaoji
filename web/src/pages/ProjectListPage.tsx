@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/useAppStore';
 import { FileText, Trash2, Clock, CheckCircle2, AlertCircle, Loader2, HardDrive, MoreVertical } from 'lucide-react';
 import { FileMigrationDialog } from '../components/FileMigrationDialog';
 import { ProjectActionDialog } from '../components/ProjectActionDialog';
+import { getProjectStatusText } from '../lib/status';
 
 export const ProjectListPage = () => {
   const { projects, loadProjects, isLoading, removeProject } = useAppStore();
@@ -121,19 +122,6 @@ export const ProjectListPage = () => {
     }
   };
 
-  const getStatusText = (status: string) => {
-    const statusMap: Record<string, string> = {
-      pending: '等待中',
-      extracting: '提取音频',
-      ready_to_transcribe: '准备转写',
-      transcribing: '转写中',
-      processing: '处理中',
-      completed: '已完成',
-      error: '错误'
-    };
-    return statusMap[status] || status;
-  };
-
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -237,7 +225,7 @@ export const ProjectListPage = () => {
                     <div className="flex items-center justify-between text-sm text-gray-500 mt-4">
                       <span className="flex items-center gap-1.5">
                         {getStatusIcon(project.status)}
-                        <span className="font-medium">{getStatusText(project.status)}</span>
+                        <span className="font-medium">{getProjectStatusText(project.status, 'short')}</span>
                       </span>
                       <span>{new Date(project.created_at).toLocaleDateString()}</span>
                     </div>
