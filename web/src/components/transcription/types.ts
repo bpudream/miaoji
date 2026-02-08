@@ -1,4 +1,4 @@
-import type { Project } from '../../lib/api';
+import type { Project, StreamSegmentRow } from '../../lib/api';
 import type { TranslationResponse } from '../../lib/api';
 
 export interface Segment {
@@ -43,6 +43,7 @@ export interface TranslationViewProps {
   projectId: string;
   viewMode: 'translated' | 'bilingual';
   translation: TranslationResponse | null;
+  streamSegments?: StreamSegmentRow[];
   onSegmentClick?: (time: number) => void;
   currentPlayTime: number;
 }

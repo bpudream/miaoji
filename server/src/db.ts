@@ -138,6 +138,8 @@ const initDb = () => {
   if (isTest) {
     db.exec('DROP TABLE IF EXISTS summaries');
     db.exec('DROP TABLE IF EXISTS transcriptions');
+    db.exec('DROP TABLE IF EXISTS transcription_segments');
+    db.exec('DROP TABLE IF EXISTS translation_segments');
     db.exec('DROP TABLE IF EXISTS media_files');
     db.exec('DROP TABLE IF EXISTS media_files_uuid_migrated');
     db.exec('DROP TABLE IF EXISTS teams');
@@ -232,10 +234,60 @@ const initDb = () => {
       media_file_id TEXT,
       content TEXT,
       format TEXT DEFAULT 'text',
+      stream_translate_enabled BOOLEAN DEFAULT 0,
+      stream_translate_status TEXT DEFAULT 'idle',
+      stream_translate_language TEXT DEFAULT 'zh',
+      stream_translate_updated_at DATETIME,
+      stream_translate_error TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (media_file_id) REFERENCES media_files(id)
     );
   `);
+
+  if (!isTest) {
+    ensureColumn('transcriptions', 'stream_translate_enabled', 'stream_translate_enabled BOOLEAN DEFAULT 0');
+    ensureColumn('transcriptions', 'stream_translate_status', "stream_translate_status TEXT DEFAULT 'idle'");
+    ensureColumn('transcriptions', 'stream_translate_language', "stream_translate_language TEXT DEFAULT 'zh'");
+    ensureColumn('transcriptions', 'stream_translate_updated_at', 'stream_translate_updated_at DATETIME');
+    ensureColumn('transcriptions', 'stream_translate_error', 'stream_translate_error TEXT');
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS transcription_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transcription_id INTEGER NOT NULL,
+      segment_index INTEGER NOT NULL,
+      start_time REAL NOT NULL,
+      end_time REAL NOT NULL,
+      text TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (transcription_id) REFERENCES transcriptions(id),
+      UNIQUE(transcription_id, segment_index)
+    );
+  `);
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_transcription_segments_tid ON transcription_segments(transcription_id)');
+  } catch (e: any) {
+    // ignore
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS translation_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transcription_id INTEGER NOT NULL,
+      language TEXT NOT NULL,
+      segment_index INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (transcription_id) REFERENCES transcriptions(id),
+      UNIQUE(transcription_id, language, segment_index)
+    );
+  `);
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_translation_segments_tid_lang ON translation_segments(transcription_id, language)');
+  } catch (e: any) {
+    // ignore
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS summaries (
@@ -349,6 +401,11 @@ const initDb = () => {
           provider: 'ollama',
           base_url: 'http://localhost:11434',
           model_name: 'qwen3:14b',
+          translation_chunk_tokens: 1200,
+          translation_overlap_tokens: 200,
+          translation_context_tokens: 4096,
+          translation_stream_batch_size: 5,
+          translation_stream_context_lines: 3,
         });
         db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('llm_config', defaultLLM);
         console.log('[DB] Initialized default llm_config (ollama)');

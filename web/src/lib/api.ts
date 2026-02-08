@@ -54,6 +54,9 @@ export interface Project {
   transcription?: {
     content: any;
     format: string;
+    stream_translate_enabled?: number | boolean;
+    stream_translate_status?: string | null;
+    stream_translate_language?: string | null;
   };
 }
 
@@ -449,6 +452,8 @@ export interface LLMSettings {
   translation_chunk_tokens?: number;
   translation_overlap_tokens?: number;
   translation_context_tokens?: number;
+  translation_stream_batch_size?: number;
+  translation_stream_context_lines?: number;
   api_key_set?: boolean;
 }
 
@@ -464,9 +469,47 @@ export const updateLLMSettings = async (data: {
   translation_chunk_tokens?: number;
   translation_overlap_tokens?: number;
   translation_context_tokens?: number;
+  translation_stream_batch_size?: number;
+  translation_stream_context_lines?: number;
   api_key?: string;
 }): Promise<{ status: string; config: LLMSettings }> => {
   const response = await api.post<{ status: string; config: LLMSettings }>('/settings/llm', data);
+  return response.data;
+};
+
+export interface StreamSegmentRow {
+  index: number;
+  start: number;
+  end: number;
+  original: string;
+  translation: string | null;
+}
+
+export const getTranscriptionSegments = async (
+  projectId: string,
+  language: string
+): Promise<StreamSegmentRow[]> => {
+  const response = await api.get<StreamSegmentRow[]>(`/projects/${projectId}/transcription/segments`, {
+    params: { language },
+  });
+  return response.data;
+};
+
+export const setStreamTranslate = async (
+  projectId: string,
+  enabled: boolean,
+  language?: string
+): Promise<{
+  status: string;
+  stream_translate_enabled: boolean;
+  stream_translate_status: string;
+  stream_translate_language: string;
+  stream_translate_updated_at: string;
+}> => {
+  const response = await api.post(`/projects/${projectId}/transcription/stream-translate`, {
+    enabled,
+    language,
+  });
   return response.data;
 };
 

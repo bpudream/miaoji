@@ -4,11 +4,14 @@ import {
   getTranslation,
   requestTranslation,
   getTranscription,
+  getTranscriptionSegments,
+  setStreamTranslate,
   exportTranscription,
   getTeams,
   getTranscribePreview,
   startTranscription,
   type TranslationResponse,
+  type StreamSegmentRow,
   type ExportFormat,
   type Team,
   type RosterMode,
@@ -41,6 +44,11 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationError, setTranslationError] = useState<string | null>(null);
   const [translationData, setTranslationData] = useState<TranslationResponse | null>(null);
+  const [streamSegments, setStreamSegments] = useState<StreamSegmentRow[]>([]);
+  const [streamTranslateEnabled, setStreamTranslateEnabled] = useState(false);
+  const [streamTranslateStatus, setStreamTranslateStatus] = useState<string | null>(null);
+  const [streamTranslateError, setStreamTranslateError] = useState<string | null>(null);
+  const [streamTranslateLoading, setStreamTranslateLoading] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
@@ -81,10 +89,10 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
   }, []);
 
   useEffect(() => {
-    if (project.status !== 'completed' && viewMode !== 'original') {
+    if (project.status !== 'completed' && !streamTranslateEnabled && viewMode !== 'original') {
       setViewMode('original');
     }
-  }, [project.status, viewMode]);
+  }, [project.status, viewMode, streamTranslateEnabled]);
 
   useEffect(() => {
     return () => {
@@ -138,11 +146,41 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
 
   useEffect(() => {
     if (viewMode === 'translated' || viewMode === 'bilingual') {
-      if (!translationData && !isTranslating) {
+      if (!streamTranslateEnabled && !translationData && !isTranslating) {
         startPollingTranslation(targetLanguage);
       }
     }
-  }, [viewMode, targetLanguage, translationData, isTranslating, startPollingTranslation]);
+  }, [viewMode, targetLanguage, translationData, isTranslating, startPollingTranslation, streamTranslateEnabled]);
+
+  useEffect(() => {
+    const enabled = Boolean(project.transcription?.stream_translate_enabled);
+    setStreamTranslateEnabled(enabled);
+    setStreamTranslateStatus(project.transcription?.stream_translate_status ?? null);
+  }, [project.transcription?.stream_translate_enabled, project.transcription?.stream_translate_status]);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const shouldPoll = streamTranslateEnabled;
+    if (!shouldPoll || !project?.id) {
+      setStreamSegments([]);
+      return;
+    }
+    const poll = async () => {
+      try {
+        const rows = await getTranscriptionSegments(project.id, targetLanguage);
+        setStreamSegments(rows);
+        setStreamTranslateError(null);
+      } catch (err: any) {
+        setStreamTranslateError(err?.response?.data?.error || '同步翻译拉取失败');
+      } finally {
+        timer = window.setTimeout(poll, 3000);
+      }
+    };
+    poll();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [project?.id, streamTranslateEnabled, targetLanguage]);
 
   useEffect(() => {
     let mounted = true;
@@ -168,15 +206,23 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
 
   useEffect(() => {
     if (!onOverlayDataChange) return;
-    const translatedSegments = (translationData?.content?.segments ?? [])
-      .filter((segment): segment is { start: number; end: number; text: string } =>
-        typeof segment?.start === 'number' && typeof segment?.end === 'number'
-      )
-      .map((segment) => ({
-        start: segment.start,
-        end: segment.end,
-        text: segment.text ?? ''
-      }));
+    const translatedSegments = translationData?.content?.segments
+      ? translationData.content.segments
+          .filter((segment): segment is { start: number; end: number; text: string } =>
+            typeof segment?.start === 'number' && typeof segment?.end === 'number'
+          )
+          .map((segment) => ({
+            start: segment.start,
+            end: segment.end,
+            text: segment.text ?? ''
+          }))
+      : streamSegments
+          .filter((segment) => segment.translation != null)
+          .map((segment) => ({
+            start: segment.start,
+            end: segment.end,
+            text: segment.translation ?? ''
+          }));
     const payload: SubtitleOverlayData = {
       viewMode,
       originalSegments,
@@ -228,6 +274,22 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
     } catch (err: any) {
       setIsTranslating(false);
       setTranslationError(err?.response?.data?.error || '提交翻译任务失败');
+    }
+  };
+
+  const handleStreamTranslateToggle = async () => {
+    if (!project?.id || !project.transcription) return;
+    setStreamTranslateLoading(true);
+    try {
+      const nextEnabled = !streamTranslateEnabled;
+      const result = await setStreamTranslate(project.id, nextEnabled, targetLanguage);
+      setStreamTranslateEnabled(Boolean(result.stream_translate_enabled));
+      setStreamTranslateStatus(result.stream_translate_status || null);
+      setStreamTranslateError(null);
+    } catch (err: any) {
+      setStreamTranslateError(err?.response?.data?.error || '同步翻译设置失败');
+    } finally {
+      setStreamTranslateLoading(false);
     }
   };
 
@@ -364,6 +426,21 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
     project.status
   );
   const showStreamingResult = project.status === 'transcribing' || project.status === 'processing';
+  const showViewModeToggle = project.status === 'completed' || streamTranslateEnabled;
+  const showStreamTranslateToggle =
+    Boolean(project.transcription) && ['transcribing', 'processing', 'completed'].includes(project.status);
+  const showTranslationView = viewMode !== 'original' && (project.status === 'completed' || streamTranslateEnabled);
+  const showOriginalResult = viewMode === 'original' && (project.status === 'completed' || showStreamingResult);
+  const allowEditing = project.status === 'completed';
+  const streamStatusLabel = (() => {
+    if (!streamTranslateStatus) return null;
+    if (streamTranslateStatus === 'processing') return '翻译中';
+    if (streamTranslateStatus === 'waiting') return '等待中';
+    if (streamTranslateStatus === 'completed') return '已完成';
+    if (streamTranslateStatus === 'paused') return '已暂停';
+    if (streamTranslateStatus === 'error') return '出错';
+    return streamTranslateStatus;
+  })();
 
   const formatDuration = (seconds: number) => {
     if (!Number.isFinite(seconds) || seconds <= 0) return '--:--';
@@ -435,7 +512,28 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
               <Copy className="w-4 h-4" />
             </button>
           )}
-          {project.status === 'completed' && (
+          {showStreamTranslateToggle && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleStreamTranslateToggle}
+                className={clsx(
+                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors',
+                  streamTranslateEnabled
+                    ? 'border-blue-300 bg-blue-50 text-blue-700 hover:border-blue-400'
+                    : 'border-gray-300 text-gray-600 hover:border-blue-300 hover:text-blue-600'
+                )}
+                title={streamTranslateEnabled ? '点击关闭同步翻译' : '点击开启同步翻译'}
+                disabled={streamTranslateLoading}
+              >
+                <span className="text-base">🧩</span>
+                {streamTranslateLoading ? '处理中...' : streamTranslateEnabled ? '同步翻译：开' : '同步翻译：关'}
+              </button>
+              {streamStatusLabel && (
+                <span className="text-xs text-gray-400">{streamStatusLabel}</span>
+              )}
+            </div>
+          )}
+          {showViewModeToggle && (
             <>
               <div className="flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-1.5 py-1 text-xs">
                 {(['original', 'translated', 'bilingual'] as ViewMode[]).map(
@@ -584,83 +682,76 @@ export const TranscriptionPanel: React.FC<TranscriptionPanelProps> = ({
       </div>
 
       <div className="flex-1 overflow-hidden px-6">
-        {project.status === 'completed' ? (
-          viewMode === 'original' ? (
-            <TranscriptionResult
-              fileId={project.id}
-              projectStatus={project.status}
-              className="h-full"
-              isEditing={isEditing}
-              onEditingChange={setIsEditing}
-              onSegmentClick={(time) => playerRef.current?.seekTo(time)}
-              currentPlayTime={currentPlayTime}
-              onStatsChange={setStats}
-            />
-          ) : (
-            <div className="h-full flex flex-col">
-              {translationError && (
-                <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-                  {translationError}
-                </div>
-              )}
-              {(isTranslating || translationData?.status === 'processing') &&
-              translationData?.status !== 'completed' ? (
-                <div className="flex h-full flex-col items-center justify-center text-gray-400">
-                  <Loader2 className="w-10 h-10 animate-spin text-blue-200 mb-2" />
-                  <p>正在翻译中，请稍候...</p>
-                  {translationData?.progress != null && (
-                    <div className="w-48 mt-4">
-                      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                          style={{
-                            width: `${Math.min(100, translationData.progress)}%`,
-                          }}
-                        />
+        {showTranslationView ? (
+          <div className="h-full flex flex-col">
+            {translationError && (
+              <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                {translationError}
+              </div>
+            )}
+            {streamTranslateError && (
+              <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                {streamTranslateError}
+              </div>
+            )}
+            {(isTranslating || translationData?.status === 'processing') &&
+            translationData?.status !== 'completed' ? (
+              <div className="flex h-full flex-col items-center justify-center text-gray-400">
+                <Loader2 className="w-10 h-10 animate-spin text-blue-200 mb-2" />
+                <p>正在翻译中，请稍候...</p>
+                {translationData?.progress != null && (
+                  <div className="w-48 mt-4">
+                    <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                        style={{
+                          width: `${Math.min(100, translationData.progress)}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">
+                      约 {Math.round(translationData.progress)}%
+                    </p>
+                  </div>
+                )}
+                {translationData?.total_chunks != null &&
+                  translationData?.completed_chunks != null && (
+                    <div className="mt-3 text-xs text-gray-400 space-y-1">
+                      <div>
+                        剩余 {Math.max(0, translationData.total_chunks - translationData.completed_chunks)} /{' '}
+                        {translationData.total_chunks} 块
                       </div>
-                      <p className="text-xs text-gray-400 mt-1">
-                        约 {Math.round(translationData.progress)}%
-                      </p>
+                      {translationData.started_at && translationData.completed_chunks > 0 && (
+                        <div>
+                          预计剩余{' '}
+                          {formatDuration(
+                            ((Date.now() - new Date(translationData.started_at).getTime()) / 1000) /
+                              Math.max(1, translationData.completed_chunks) *
+                              Math.max(0, translationData.total_chunks - translationData.completed_chunks)
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
-                  {translationData?.total_chunks != null &&
-                    translationData?.completed_chunks != null && (
-                      <div className="mt-3 text-xs text-gray-400 space-y-1">
-                        <div>
-                          剩余 {Math.max(0, translationData.total_chunks - translationData.completed_chunks)} /{' '}
-                          {translationData.total_chunks} 块
-                        </div>
-                        {translationData.started_at && translationData.completed_chunks > 0 && (
-                          <div>
-                            预计剩余{' '}
-                            {formatDuration(
-                              ((Date.now() - new Date(translationData.started_at).getTime()) / 1000) /
-                                Math.max(1, translationData.completed_chunks) *
-                                Math.max(0, translationData.total_chunks - translationData.completed_chunks)
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                </div>
-              ) : (
-                <TranslationView
-                  projectId={project.id}
-                  viewMode={viewMode}
-                  translation={translationData}
-                  onSegmentClick={(time) => playerRef.current?.seekTo(time)}
-                  currentPlayTime={currentPlayTime}
-                />
-              )}
-            </div>
-          )
-        ) : showStreamingResult ? (
+              </div>
+            ) : (
+              <TranslationView
+                projectId={project.id}
+                viewMode={viewMode}
+                translation={translationData}
+                streamSegments={streamTranslateEnabled ? streamSegments : undefined}
+                onSegmentClick={(time) => playerRef.current?.seekTo(time)}
+                currentPlayTime={currentPlayTime}
+              />
+            )}
+          </div>
+        ) : showOriginalResult ? (
           <TranscriptionResult
             fileId={project.id}
             projectStatus={project.status}
             className="h-full"
-            isEditing={false}
-            onEditingChange={setIsEditing}
+            isEditing={allowEditing ? isEditing : false}
+            onEditingChange={allowEditing ? setIsEditing : undefined}
             onSegmentClick={(time) => playerRef.current?.seekTo(time)}
             currentPlayTime={currentPlayTime}
             onStatsChange={setStats}

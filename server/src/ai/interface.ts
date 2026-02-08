@@ -54,4 +54,8 @@ export interface LLMConfig {
   translation_overlap_tokens?: number;
   /** 翻译分块参数：上下文窗口 token 上限（估算） */
   translation_context_tokens?: number;
+  /** 流式翻译批量大小（按句子数） */
+  translation_stream_batch_size?: number;
+  /** 流式翻译上下文行数（上一批末尾） */
+  translation_stream_context_lines?: number;
 }

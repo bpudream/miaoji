@@ -30,6 +30,8 @@ export const LLMConfigCard = () => {
   const [translationChunkTokens, setTranslationChunkTokens] = useState('');
   const [translationOverlapTokens, setTranslationOverlapTokens] = useState('');
   const [translationContextTokens, setTranslationContextTokens] = useState('');
+  const [translationStreamBatchSize, setTranslationStreamBatchSize] = useState('');
+  const [translationStreamContextLines, setTranslationStreamContextLines] = useState('');
 
   useEffect(() => {
     loadConfig();
@@ -52,6 +54,12 @@ export const LLMConfigCard = () => {
       );
       setTranslationContextTokens(
         data.translation_context_tokens != null ? String(data.translation_context_tokens) : ''
+      );
+      setTranslationStreamBatchSize(
+        data.translation_stream_batch_size != null ? String(data.translation_stream_batch_size) : ''
+      );
+      setTranslationStreamContextLines(
+        data.translation_stream_context_lines != null ? String(data.translation_stream_context_lines) : ''
       );
       setApiKeyInput(''); // 不回显 API Key，仅占位
     } catch (e: any) {
@@ -78,6 +86,10 @@ export const LLMConfigCard = () => {
       if (!Number.isNaN(overlapTokens)) payload.translation_overlap_tokens = overlapTokens;
       const contextTokens = parseInt(translationContextTokens, 10);
       if (!Number.isNaN(contextTokens)) payload.translation_context_tokens = contextTokens;
+      const streamBatchSize = parseInt(translationStreamBatchSize, 10);
+      if (!Number.isNaN(streamBatchSize)) payload.translation_stream_batch_size = streamBatchSize;
+      const streamContextLines = parseInt(translationStreamContextLines, 10);
+      if (!Number.isNaN(streamContextLines)) payload.translation_stream_context_lines = streamContextLines;
       if (provider === 'openai' && apiKeyInput.trim()) {
         payload.api_key = apiKeyInput.trim();
       }
@@ -109,6 +121,10 @@ export const LLMConfigCard = () => {
       if (!Number.isNaN(overlapTokens)) payload.translation_overlap_tokens = overlapTokens;
       const contextTokens = parseInt(translationContextTokens, 10);
       if (!Number.isNaN(contextTokens)) payload.translation_context_tokens = contextTokens;
+      const streamBatchSize = parseInt(translationStreamBatchSize, 10);
+      if (!Number.isNaN(streamBatchSize)) payload.translation_stream_batch_size = streamBatchSize;
+      const streamContextLines = parseInt(translationStreamContextLines, 10);
+      if (!Number.isNaN(streamContextLines)) payload.translation_stream_context_lines = streamContextLines;
       if (provider === 'openai' && apiKeyInput.trim()) payload.api_key = apiKeyInput.trim();
       await updateLLMSettings(payload);
       const result = await testLLMConnection();
@@ -261,6 +277,34 @@ export const LLMConfigCard = () => {
           <p className="mt-2 text-xs text-gray-500">
             留空将使用默认值；本地 14B 建议更小的 chunk 和 overlap。
           </p>
+        </div>
+
+        <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <div className="mb-2 text-sm font-medium text-gray-700">流式翻译批量参数（可选）</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Batch Size（句）</label>
+              <input
+                type="number"
+                min={1}
+                value={translationStreamBatchSize}
+                onChange={(e) => setTranslationStreamBatchSize(e.target.value)}
+                placeholder="例如 5"
+                className="w-full rounded-md border border-gray-200 px-2.5 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-gray-600">Context Lines（上一批）</label>
+              <input
+                type="number"
+                min={0}
+                value={translationStreamContextLines}
+                onChange={(e) => setTranslationStreamContextLines(e.target.value)}
+                placeholder="例如 3"
+                className="w-full rounded-md border border-gray-200 px-2.5 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
         </div>
       </div>
 

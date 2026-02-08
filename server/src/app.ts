@@ -12,6 +12,7 @@ import queue from './queue';
 import { getPrompts, SummaryMode } from './ai/prompts';
 import { LLMFactory } from './ai/factory';
 import { getLLMConfig, getLLMConfigForAPI, setLLMConfig } from './services/config';
+import { startStreamTranslationScheduler } from './services/translation';
 import { StorageService } from './services/storage';
 import { ProjectPathService } from './services/projectPath';
 import { calculateFileHash } from './services/fileHash';
@@ -448,6 +449,8 @@ export const buildApp = () => {
       translation_chunk_tokens: 1200,
       translation_overlap_tokens: 200,
       translation_context_tokens: 4096,
+      translation_stream_batch_size: 5,
+      translation_stream_context_lines: 3,
       api_key_set: false,
     };
   });
@@ -462,6 +465,8 @@ export const buildApp = () => {
       translation_chunk_tokens?: number;
       translation_overlap_tokens?: number;
       translation_context_tokens?: number;
+      translation_stream_batch_size?: number;
+      translation_stream_context_lines?: number;
     };
     const provider = body.provider as 'ollama' | 'openai' | undefined;
     if (!provider || !['ollama', 'openai'].includes(provider)) {
@@ -482,6 +487,12 @@ export const buildApp = () => {
     }
     if (body.translation_context_tokens !== undefined) {
       payload.translation_context_tokens = body.translation_context_tokens;
+    }
+    if (body.translation_stream_batch_size !== undefined) {
+      payload.translation_stream_batch_size = body.translation_stream_batch_size;
+    }
+    if (body.translation_stream_context_lines !== undefined) {
+      payload.translation_stream_context_lines = body.translation_stream_context_lines;
     }
     if (body.api_key !== undefined) payload.api_key = body.api_key;
     setLLMConfig(payload);
@@ -945,6 +956,24 @@ export const buildApp = () => {
     const updateStmt = db.prepare('UPDATE transcriptions SET content = ? WHERE media_file_id = ?');
     updateStmt.run(JSON.stringify(content), id);
 
+    if (existingTrans?.id != null) {
+      const deleteTx = db.transaction(() => {
+        db.prepare('DELETE FROM translation_segments WHERE transcription_id = ?').run(existingTrans.id);
+        db.prepare('DELETE FROM transcription_segments WHERE transcription_id = ?').run(existingTrans.id);
+        const insertStmt = db.prepare(
+          `INSERT INTO transcription_segments (transcription_id, segment_index, start_time, end_time, text)
+           VALUES (?, ?, ?, ?, ?)`
+        );
+        segments.forEach((seg: any, idx: number) => {
+          const start = Number(seg.start ?? 0);
+          const end = Number(seg.end ?? 0);
+          const text = String(seg.text ?? '');
+          insertStmt.run(existingTrans.id, idx, start, end, text);
+        });
+      });
+      deleteTx();
+    }
+
     return { status: 'success', transcription: { ...existingTrans, content } };
   });
 
@@ -1135,6 +1164,8 @@ export const buildApp = () => {
     `).run(scenarioValue, transcribeMeta, id);
 
     // 清理旧的转写与总结，避免历史数据干扰
+    db.prepare('DELETE FROM translation_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
+    db.prepare('DELETE FROM transcription_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
     db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
     db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
 
@@ -1481,6 +1512,72 @@ export const buildApp = () => {
     };
   });
 
+  // 获取流式转写段落（可拼接对应译文）
+  fastify.get('/api/projects/:id/transcription/segments', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { language = 'zh' } = request.query as { language?: string };
+    const trans = db.prepare('SELECT id FROM transcriptions WHERE media_file_id = ?').get(id) as { id: number } | undefined;
+    if (!trans) {
+      return reply.code(404).send({ error: 'Transcription not found' });
+    }
+    const rows = db.prepare(
+      `SELECT ts.segment_index, ts.start_time, ts.end_time, ts.text as original_text, tls.text as translated_text
+       FROM transcription_segments ts
+       LEFT JOIN translation_segments tls
+         ON ts.transcription_id = tls.transcription_id
+        AND ts.segment_index = tls.segment_index
+        AND tls.language = ?
+       WHERE ts.transcription_id = ?
+       ORDER BY ts.segment_index ASC`
+    ).all(language, trans.id) as Array<{
+      segment_index: number;
+      start_time: number;
+      end_time: number;
+      original_text: string;
+      translated_text: string | null;
+    }>;
+    return rows.map((row) => ({
+      index: row.segment_index,
+      start: row.start_time,
+      end: row.end_time,
+      original: row.original_text,
+      translation: row.translated_text ?? null,
+    }));
+  });
+
+  // 开启/关闭同步翻译
+  fastify.post('/api/projects/:id/transcription/stream-translate', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { enabled?: boolean; language?: string };
+    const trans = db.prepare('SELECT id FROM transcriptions WHERE media_file_id = ?').get(id) as { id: number } | undefined;
+    if (!trans) {
+      return reply.code(404).send({ error: 'Transcription not found' });
+    }
+    const enabled = Boolean(body?.enabled);
+    const lang = body?.language != null && String(body.language).trim() !== '' ? String(body.language).trim() : undefined;
+    const updateSql = `
+      UPDATE transcriptions
+      SET stream_translate_enabled = ?,
+          stream_translate_status = ?,
+          stream_translate_language = COALESCE(?, stream_translate_language),
+          stream_translate_updated_at = datetime('now'),
+          stream_translate_error = NULL
+      WHERE id = ?
+    `;
+    db.prepare(updateSql).run(enabled ? 1 : 0, enabled ? 'idle' : 'paused', lang ?? null, trans.id);
+    const updated = db.prepare(
+      `SELECT stream_translate_enabled, stream_translate_status, stream_translate_language, stream_translate_updated_at
+       FROM transcriptions WHERE id = ?`
+    ).get(trans.id) as any;
+    return {
+      status: 'success',
+      stream_translate_enabled: Boolean(updated?.stream_translate_enabled),
+      stream_translate_status: updated?.stream_translate_status,
+      stream_translate_language: updated?.stream_translate_language,
+      stream_translate_updated_at: updated?.stream_translate_updated_at,
+    };
+  });
+
   const sanitizeFilename = (name: string) => {
     return name.replace(/[\\/:*?"<>|]+/g, '_').trim();
   };
@@ -1703,6 +1800,8 @@ export const buildApp = () => {
     // 使用事务确保原子性（先删 translations 再删 transcriptions，因 FK 关联）
     const deleteTransaction = db.transaction(() => {
       db.prepare('DELETE FROM translations WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
+      db.prepare('DELETE FROM translation_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
+      db.prepare('DELETE FROM transcription_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
       db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
       db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
       db.prepare('DELETE FROM media_files WHERE id = ?').run(id);
@@ -1773,6 +1872,8 @@ export const buildApp = () => {
     updateStmt.run(id);
 
     // 清理旧的转写和总结，防止数据冲突
+    db.prepare('DELETE FROM translation_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
+    db.prepare('DELETE FROM transcription_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE media_file_id = ?)').run(id);
     db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(id);
     db.prepare('DELETE FROM summaries WHERE media_file_id = ?').run(id);
 
@@ -1980,6 +2081,9 @@ const start = async () => {
     // 启动日志清理任务（每天清理一次，保留7天）
     startLogCleanupScheduler(7, 24);
     logger.info('Log cleanup scheduler started (cleanup every 24 hours, keep 7 days)');
+
+    startStreamTranslationScheduler(3000);
+    logger.info('Stream translation scheduler started (tick every 3 seconds)');
 
     await fastify.listen({ port: BACKEND_PORT, host: '0.0.0.0' });
     logger.info({ port: BACKEND_PORT }, 'Server listening');

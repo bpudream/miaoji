@@ -10,17 +10,28 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
   projectId,
   viewMode,
   translation,
+  streamSegments,
   onSegmentClick,
   currentPlayTime,
 }) => {
   const [originalSegments, setOriginalSegments] = useState<Segment[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const segmentRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const hasStreamSegments = Boolean(streamSegments && streamSegments.length > 0);
 
   useEffect(() => {
     let mounted = true;
     const loadOriginal = async () => {
       try {
+        if (hasStreamSegments && streamSegments) {
+          const next = streamSegments.map((seg) => ({
+            start: seg.start,
+            end: seg.end,
+            text: seg.original,
+          }));
+          if (mounted) setOriginalSegments(next);
+          return;
+        }
         const res = await getTranscription(projectId);
         const segments = extractSegmentsFromContent(res.transcription?.content);
         if (mounted) setOriginalSegments(segments);
@@ -32,9 +43,11 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
     return () => {
       mounted = false;
     };
-  }, [projectId]);
+  }, [projectId, hasStreamSegments, streamSegments]);
 
-  const translatedSegments = translation?.content?.segments ?? [];
+  const translatedSegments = hasStreamSegments
+    ? streamSegments!.map((seg) => ({ text: seg.translation ?? '' }))
+    : (translation?.content?.segments ?? []);
 
   useEffect(() => {
     if (currentPlayTime > 0 && autoScroll) {
@@ -50,7 +63,7 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
     }
   }, [currentPlayTime, originalSegments, autoScroll]);
 
-  if (!translation) {
+  if (!translation && !hasStreamSegments) {
     return (
       <div className="flex h-full flex-col items-center justify-center text-gray-400">
         <AlertCircle className="w-10 h-10 text-amber-200 mb-2" />

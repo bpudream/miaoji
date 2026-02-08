@@ -10,6 +10,8 @@ const DEFAULT_LLM_CONFIG: LLMConfig = {
   translation_chunk_tokens: 1200,
   translation_overlap_tokens: 200,
   translation_context_tokens: 4096,
+  translation_stream_batch_size: 5,
+  translation_stream_context_lines: 3,
 };
 
 /**
@@ -64,6 +66,16 @@ export function setLLMConfig(config: Partial<LLMConfig> & { provider: LLMConfig[
       ? config.translation_context_tokens
       : current.translation_context_tokens;
   if (contextTokens != null) next.translation_context_tokens = contextTokens;
+  const streamBatchSize =
+    config.translation_stream_batch_size !== undefined
+      ? config.translation_stream_batch_size
+      : current.translation_stream_batch_size;
+  if (streamBatchSize != null) next.translation_stream_batch_size = streamBatchSize;
+  const streamContextLines =
+    config.translation_stream_context_lines !== undefined
+      ? config.translation_stream_context_lines
+      : current.translation_stream_context_lines;
+  if (streamContextLines != null) next.translation_stream_context_lines = streamContextLines;
   const apiKey = config.api_key !== undefined ? (config.api_key === '' ? undefined : config.api_key) : current.api_key;
   if (apiKey != null) next.api_key = apiKey;
   const value = JSON.stringify(next);

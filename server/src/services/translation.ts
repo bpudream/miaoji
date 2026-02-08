@@ -13,6 +13,8 @@ const DEFAULT_TARGET_LANG = 'en';
 const MAX_RETRIES = 2;
 /** 保守估计：超过此字符数时 Ollama 等短上下文模型易截断 */
 const COMPRESSED_LENGTH_GUARD = 4000;
+const STREAM_DEFAULT_BATCH_SIZE = 5;
+const STREAM_DEFAULT_CONTEXT_LINES = 3;
 
 function parseSegmentsFromTranscription(content: string, format: string): Segment[] {
   let parsed: any;
@@ -208,4 +210,228 @@ Rules:
     updateProgress(lastProgress, 'error', lastCompleted);
     throw err;
   }
+}
+
+type StreamTaskRow = {
+  transcription_id: number;
+  media_file_id: string;
+  stream_translate_language?: string | null;
+  stream_translate_status?: string | null;
+  media_status?: string | null;
+};
+
+const streamSystemPrompt = (lang: string) => `You are a professional subtitle translator.
+Translate the following text lines into ${lang}.
+Strictly follow this format for each line:
+[ID] <Translated Text>
+
+Rules:
+1. Keep the [ID] exactly as in the input.
+2. Do not merge or split lines.
+3. Only output the translated lines, no explanations.
+4. If a line is just a symbol or meaningless, keep it as is.`;
+
+const buildStreamInput = (
+  lang: string,
+  contextLines: Array<{ id: number; original: string; translated: string }>,
+  batchLines: Array<{ id: number; text: string }>
+) => {
+  const context =
+    contextLines.length > 0
+      ? `Context (previous translated):\n${contextLines
+          .map((line) => `[${line.id}] ${line.original} -> ${line.translated}`)
+          .join('\n')}\n\n`
+      : '';
+  const input = batchLines.map((line) => `[${line.id}] ${line.text}`).join('\n');
+  return {
+    systemPrompt: streamSystemPrompt(lang),
+    userPrompt: `${context}Input:\n${input}`
+  };
+};
+
+const updateStreamStatus = (
+  transcriptionId: number,
+  status: string,
+  error?: string | null
+) => {
+  db.prepare(
+    `UPDATE transcriptions
+     SET stream_translate_status = ?, stream_translate_updated_at = datetime('now'), stream_translate_error = ?
+     WHERE id = ?`
+  ).run(status, error ?? null, transcriptionId);
+};
+
+const getMaxIndex = (sql: string, params: any[]) => {
+  const row = db.prepare(sql).get(...params) as { max_index?: number | null } | undefined;
+  return row?.max_index != null ? Number(row.max_index) : null;
+};
+
+async function processStreamTask(
+  task: StreamTaskRow,
+  provider: NonNullable<ReturnType<typeof LLMFactory.create>>,
+  batchSize: number,
+  contextLines: number
+) {
+  const lang = task.stream_translate_language?.trim() || 'zh';
+  const transcriptionId = task.transcription_id;
+  const mediaStatus = task.media_status || '';
+
+  if (mediaStatus === 'cancelled' || mediaStatus === 'error') {
+    updateStreamStatus(transcriptionId, 'paused');
+    return;
+  }
+
+  const maxTransIndex = getMaxIndex(
+    'SELECT MAX(segment_index) as max_index FROM transcription_segments WHERE transcription_id = ?',
+    [transcriptionId]
+  );
+  if (maxTransIndex == null) {
+    updateStreamStatus(transcriptionId, 'idle');
+    return;
+  }
+
+  const maxTranslatedIndex = getMaxIndex(
+    'SELECT MAX(segment_index) as max_index FROM translation_segments WHERE transcription_id = ? AND language = ?',
+    [transcriptionId, lang]
+  );
+  const lastTranslated = maxTranslatedIndex == null ? -1 : maxTranslatedIndex;
+  const gap = maxTransIndex - lastTranslated;
+  const isTranscribeCompleted = mediaStatus === 'completed';
+
+  if (gap <= 0) {
+    updateStreamStatus(transcriptionId, isTranscribeCompleted ? 'completed' : 'idle');
+    return;
+  }
+  if (gap < batchSize && !isTranscribeCompleted) {
+    updateStreamStatus(transcriptionId, 'waiting');
+    return;
+  }
+
+  const startIndex = lastTranslated + 1;
+  const endIndex = isTranscribeCompleted ? maxTransIndex : Math.min(maxTransIndex, startIndex + batchSize - 1);
+
+  const batchRows = db.prepare(
+    `SELECT segment_index, text
+     FROM transcription_segments
+     WHERE transcription_id = ? AND segment_index BETWEEN ? AND ?
+     ORDER BY segment_index ASC`
+  ).all(transcriptionId, startIndex, endIndex) as Array<{ segment_index: number; text: string }>;
+  if (batchRows.length === 0) {
+    updateStreamStatus(transcriptionId, 'idle');
+    return;
+  }
+
+  const contextStart = Math.max(0, startIndex - contextLines);
+  const contextRows = contextLines > 0
+    ? (db.prepare(
+        `SELECT ts.segment_index, ts.text as original, tls.text as translated
+         FROM transcription_segments ts
+         LEFT JOIN translation_segments tls
+           ON ts.transcription_id = tls.transcription_id
+          AND ts.segment_index = tls.segment_index
+          AND tls.language = ?
+         WHERE ts.transcription_id = ? AND ts.segment_index BETWEEN ? AND ?
+         ORDER BY ts.segment_index ASC`
+      ).all(lang, transcriptionId, contextStart, startIndex - 1) as Array<{
+        segment_index: number;
+        original: string;
+        translated: string | null;
+      }>)
+    : [];
+
+  const contextPayload = contextRows
+    .filter((row) => row.original && row.original.trim())
+    .map((row) => ({
+      id: row.segment_index + 1,
+      original: row.original.replace(/\s+/g, ' ').trim(),
+      translated: (row.translated ?? row.original).replace(/\s+/g, ' ').trim()
+    }));
+
+  const batchPayload = batchRows.map((row) => ({
+    id: row.segment_index + 1,
+    text: (row.text ?? '').replace(/\s+/g, ' ').trim()
+  }));
+
+  updateStreamStatus(transcriptionId, 'processing');
+
+  const { systemPrompt, userPrompt } = buildStreamInput(lang, contextPayload, batchPayload);
+  const messages = [
+    { role: 'system' as const, content: systemPrompt },
+    { role: 'user' as const, content: userPrompt },
+  ];
+
+  let lastError: Error | null = null;
+  let translatedMap: Map<number, string> | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const raw = await provider.chat(messages);
+      translatedMap = parseTranslatedLines(raw);
+      lastError = null;
+      break;
+    } catch (err: any) {
+      lastError = err;
+      logger.warn(
+        { transcriptionId, attempt: attempt + 1, err: err.message, batch: `${startIndex}-${endIndex}` },
+        'Stream translation attempt failed'
+      );
+    }
+  }
+  if (lastError || !translatedMap) {
+    updateStreamStatus(transcriptionId, 'error', lastError?.message || 'Translation failed');
+    throw lastError ?? new Error('Translation failed');
+  }
+
+  const insertStmt = db.prepare(
+    `INSERT INTO translation_segments (transcription_id, language, segment_index, text)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(transcription_id, language, segment_index) DO UPDATE SET text = excluded.text`
+  );
+  const insertTx = db.transaction(() => {
+    for (const row of batchRows) {
+      const id = row.segment_index + 1;
+      const translated = translatedMap?.get(id) || row.text;
+      insertStmt.run(transcriptionId, lang, row.segment_index, translated);
+    }
+  });
+  insertTx();
+
+  updateStreamStatus(transcriptionId, 'idle');
+}
+
+let streamSchedulerTimer: NodeJS.Timeout | null = null;
+let streamSchedulerRunning = false;
+
+export function startStreamTranslationScheduler(intervalMs: number = 3000) {
+  if (streamSchedulerTimer) return streamSchedulerTimer;
+  streamSchedulerTimer = setInterval(async () => {
+    if (streamSchedulerRunning) return;
+    streamSchedulerRunning = true;
+    try {
+      const config = getLLMConfig();
+      const provider = config ? LLMFactory.create(config) : null;
+      if (!provider) {
+        streamSchedulerRunning = false;
+        return;
+      }
+      const batchSize = Math.max(1, Number(config?.translation_stream_batch_size ?? STREAM_DEFAULT_BATCH_SIZE));
+      const contextLines = Math.max(0, Number(config?.translation_stream_context_lines ?? STREAM_DEFAULT_CONTEXT_LINES));
+      const rows = db.prepare(
+        `SELECT t.id as transcription_id, t.media_file_id, t.stream_translate_language,
+                t.stream_translate_status, m.status as media_status
+         FROM transcriptions t
+         JOIN media_files m ON m.id = t.media_file_id
+         WHERE t.stream_translate_enabled = 1`
+      ).all() as StreamTaskRow[];
+      for (const row of rows) {
+        try {
+          await processStreamTask(row, provider, batchSize, contextLines);
+        } catch (err: any) {
+          logger.warn({ transcriptionId: row.transcription_id, err: err.message }, 'Stream translation failed');
+        }
+      }
+    } finally {
+      streamSchedulerRunning = false;
+    }
+  }, intervalMs);
+  return streamSchedulerTimer;
 }

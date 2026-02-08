@@ -67,7 +67,9 @@ class QueueService {
   private currentExtractionAbort: AbortController | null = null;
   private cancelledTaskIds = new Set<string>();
   private currentTranscriptionId: string | null = null;
+  private currentTranscriptionRowId: number | null = null;
   private currentSegments: TranscriptionSegment[] = [];
+  private currentSegmentIndex = 0;
   private segmentBufferedCount = 0;
   private segmentFlushLastTs = 0;
   private transcriptionStartedAtMs: number | null = null;
@@ -125,7 +127,9 @@ class QueueService {
       }
       if (this.currentTranscriptionId === id) {
         this.currentTranscriptionId = null;
+        this.currentTranscriptionRowId = null;
         this.currentSegments = [];
+        this.currentSegmentIndex = 0;
         this.segmentBufferedCount = 0;
         this.segmentFlushLastTs = 0;
       }
@@ -341,18 +345,30 @@ class QueueService {
 
       // 清空旧转写并初始化空记录，确保流式可读
       try {
+        const existing = db.prepare('SELECT id FROM transcriptions WHERE media_file_id = ?').get(taskId) as
+          | { id: number }
+          | undefined;
+        if (existing?.id != null) {
+          db.prepare('DELETE FROM translation_segments WHERE transcription_id = ?').run(existing.id);
+          db.prepare('DELETE FROM transcription_segments WHERE transcription_id = ?').run(existing.id);
+        }
         db.prepare('DELETE FROM transcriptions WHERE media_file_id = ?').run(taskId);
       } catch (_e) {
         // ignore
       }
       const emptyContent = JSON.stringify({ segments: [] as TranscriptionSegment[], text: '' });
-      db.prepare('INSERT INTO transcriptions (media_file_id, content, format) VALUES (?, ?, ?)').run(
+      const insertResult = db.prepare(
+        `INSERT INTO transcriptions (media_file_id, content, format, stream_translate_enabled, stream_translate_status, stream_translate_language)
+         VALUES (?, ?, ?, 0, 'idle', 'zh')`
+      ).run(
         taskId,
         emptyContent,
         'json'
       );
       this.currentTranscriptionId = taskId;
+      this.currentTranscriptionRowId = Number(insertResult.lastInsertRowid);
       this.currentSegments = [];
+      this.currentSegmentIndex = 0;
       this.segmentBufferedCount = 0;
       this.segmentFlushLastTs = 0;
       this.transcriptionStartedAtMs = Date.now();
@@ -420,7 +436,9 @@ class QueueService {
       });
     } finally {
       this.currentTranscriptionId = null;
+      this.currentTranscriptionRowId = null;
       this.currentSegments = [];
+      this.currentSegmentIndex = 0;
       this.segmentBufferedCount = 0;
       this.segmentFlushLastTs = 0;
       this.transcriptionStartedAtMs = null;
@@ -697,7 +715,7 @@ class QueueService {
     }
 
     if (message.type === 'segment') {
-      if (!this.pendingWorkerRequest || !this.currentTranscriptionId) {
+      if (!this.pendingWorkerRequest || !this.currentTranscriptionId || !this.currentTranscriptionRowId) {
         return;
       }
       const data = message.data;
@@ -712,6 +730,21 @@ class QueueService {
           end: data.end,
           text: data.text
         });
+        try {
+          db.prepare(
+            `INSERT INTO transcription_segments (transcription_id, segment_index, start_time, end_time, text)
+             VALUES (?, ?, ?, ?, ?)`
+          ).run(
+            this.currentTranscriptionRowId,
+            this.currentSegmentIndex,
+            data.start,
+            data.end,
+            data.text
+          );
+        } catch (e) {
+          logger.warn({ taskId: this.currentTranscriptionId, err: e }, 'Failed to insert transcription segment');
+        }
+        this.currentSegmentIndex += 1;
         this.segmentBufferedCount += 1;
         if (!this.firstSegmentAtMs) {
           this.firstSegmentAtMs = Date.now();
